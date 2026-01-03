@@ -53,7 +53,7 @@ Example request:
 {
   "apiVersion": "selenosis.io/v1",
   "kind": "Browser",
-  "metadata": {"name": "chrome-123"},
+  "metadata": {"name": "931b1f38-0818-421c-9606-83e1c81a26fb"},
   "spec": {
     "browserName": "chrome",
     "browserVersion": "122.0"
@@ -91,7 +91,7 @@ Event payload:
 {
   "eventType": "ADDED",
   "browser": {
-    "metadata": {"name": "chrome-123"},
+    "metadata": {"name": "931b1f38-0818-421c-9606-83e1c81a26fb"},
     "spec": {"browserName": "chrome", "browserVersion": "122.0"}
   }
 }
@@ -128,7 +128,7 @@ ctx := context.Background()
 browser := &browserv1.Browser{
   Spec: browserv1.BrowserSpec{
     BrowserName:    "chrome",
-    BrowserVersion: "122",
+    BrowserVersion: "122.0",
   },
 }
 
@@ -136,35 +136,26 @@ created, _ := c.CreateBrowser(ctx, "default", browser)
 _ = created
 ```
 
-## Build & run
-Local build:
-```bash
-go mod download
-go build -o bin/service ./cmd/service
-./bin/service --listen :8080 --kubeconfig ~/.kube/config
-```
+## Build and image workflow
 
-## Docker
-The Dockerfile builds a distroless image:
+The project is built and packaged entirely via Docker. Local Go installation is not required for producing the final artifact.
 
-```Dockerfile
-FROM gcr.io/distroless/static:nonroot
-COPY bin/service .
-ENTRYPOINT ["/service"]
-```
+## Build variables
 
-Example build/run:
-```bash
-docker build -t browser-service:local .
+The build process is controlled via the following Makefile variables:
 
-docker run --rm -p 8080:8080 \
-  browser-service:local --listen :8080
-```
+Variable	Description
+- BINARY_NAME	Name of the produced binary (browser-service).
+- DOCKER_REGISTRY	Docker registry prefix (passed via environment).
+- IMAGE_NAME	Full image name (<registry>/browser-service).
+- VERSION	Image version/tag (default: :v1.0.1).
+- PLATFORM	Target platform (default: linux/amd64).
 
-## Logging
-- Structured logging via zerolog.
-- Each request gets a unique `reqID`.
-- Logs include method and path; some handlers include namespace or browser name.
+DOCKER_REGISTRY is expected to be provided externally, which allows the same Makefile to be used locally and in CI.
+
+## Deployment
+
+To be added....
 
 ## Notes
 - The service is stateless and can be scaled horizontally.
