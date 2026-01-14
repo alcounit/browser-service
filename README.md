@@ -1,140 +1,101 @@
 # Browser Service
 
-Browser Service is a small HTTP API that exposes CRUD operations for `Browser` custom resources managed by the Browser Controller. It sits in front of Kubernetes and provides a stable REST interface for systems that need to create, read, delete, and list browser sessions without talking to the Kubernetes API directly.
+Browser Service is an HTTP API and event streaming layer for the **Selenosis** ecosystem.  
+It provides a REST interface and real-time events on top of the `Browser` resources managed by **browser-controller**.
 
-This service is typically used by higher-level components (for example, Selenosis) that spin up browser pods on demand.
+This service does **not** create Pods directly. Instead, it operates as a client-facing facade over Kubernetes `Browser` CRDs.
+
+---
 
 ## Overview
-- Stateless HTTP server.
-- Uses the generated Kubernetes clientset to create/delete `Browser` resources.
-- Uses a shared informer and lister for cached reads and event streaming.
-- Streams browser events as a JSON event stream.
 
-## Architecture
+- **Browser Service** exposes CRUD and event APIs for browser instances.
+- **browser-controller** is responsible for reconciliation and Pod lifecycle.
+- **Browser CRD** is the shared contract between the service and the controller.
 
-### Entry point
-`cmd/service/main.go` initializes:
-- CLI flags (`--kubeconfig`, `--master`, `--listen`).
-- Zerolog logger.
-- Kubernetes config (in-cluster or kubeconfig).
-- Browser Controller clientset.
-- Shared informer factory and `Browser` lister.
-- HTTP router and request-scoped logging.
-- Health endpoint and graceful shutdown.
+The service watches `Browser` resources and streams lifecycle events to clients.
 
-The server listens on `--listen` (default `:8080`).
+---
 
-### HTTP handlers
-`service/service.go` defines `BrowserService` with:
-- `clientset.Interface` for writes.
-- `BrowserLister` for cached reads.
-- Broadcaster for event streaming.
+## Responsibilities
 
-Handlers:
-- `POST /api/v1/namespaces/{namespace}/browsers` creates a `Browser` CR.
-- `GET /api/v1/namespaces/{namespace}/browsers/{name}` fetches a `Browser` from cache.
-- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}` deletes a `Browser`.
-- `GET /api/v1/namespaces/{namespace}/browsers` lists all `Browser` resources in a namespace.
-- `GET /api/v1/namespaces/{namespace}/events` streams browser events as JSON objects.
-- `GET /healthz` returns `200 OK`.
+- Expose HTTP API for managing `Browser` resources
+- Stream browser lifecycle events (ADDED / MODIFIED / DELETED)
+- Provide read-only access to `Browser.status`
+- Act as a thin abstraction over Kubernetes APIs
 
-## HTTP API
+---
 
-Base path:
-```
-/api/v1/namespaces/{namespace}
-```
+## Dependency on browser-controller
 
-### Create browser
-`POST /browsers`
+Browser Service **depends on browser-controller** for:
 
-Example request:
-```json
-{
-  "apiVersion": "selenosis.io/v1",
-  "kind": "Browser",
-  "metadata": {"name": "931b1f38-0818-421c-9606-83e1c81a26fb"},
-  "spec": {
-    "browserName": "chrome",
-    "browserVersion": "122.0"
-  }
-}
-```
+- `Browser` CRD definitions
+- Generated clientsets, informers, and listers
+- Actual browser Pod creation and lifecycle management
 
-Validation:
-- `namespace` is required.
-- Request body must not be empty.
-- `spec.browserName` and `spec.browserVersion` must be set.
+The service assumes that:
+- CRDs are already installed
+- browser-controller is running in the cluster
 
-### Get browser
-`GET /browsers/{name}`
+---
 
-Returns `204 No Content` if not found.
+## API Overview
 
-### Delete browser
-`DELETE /browsers/{name}`
+All APIs are namespaced.
 
-Returns `204 No Content` even if the resource is already deleted.
 
-### List browsers
-`GET /browsers`
+### Endpoints
 
-Returns a JSON array (empty array when no browsers exist).
+- `POST   /api/v1/namespaces/{namespace}/browsers`  
+  Create a new `Browser`
 
-### Events stream
-`GET /events`
+- `GET    /api/v1/namespaces/{namespace}/browsers/{name}`  
+  Get a single `Browser`
 
-The endpoint responds with `Content-Type: text/event-stream` and flushes a JSON-encoded `BrowserEvent` on each update. The stream is a sequence of JSON objects (not SSE `data:` frames).
+- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}`  
+  Delete a `Browser`
 
-Event payload:
-```json
-{
-  "eventType": "ADDED",
-  "browser": {
-    "metadata": {"name": "931b1f38-0818-421c-9606-83e1c81a26fb"},
-    "spec": {"browserName": "chrome", "browserVersion": "122.0"}
-  }
-}
+- `GET    /api/v1/namespaces/{namespace}/browsers`  
+  List all Browsers in a namespace
+
+- `GET    /api/v1/namespaces/{namespace}/events`  
+  Stream browser events (server-sent events over HTTP)
+
+---
+
+## Browser Events
+
+The service exposes a streaming endpoint backed by shared informers.
+
+Event types:
+
+- `ADDED`
+- `MODIFIED`
+- `DELETED`
+
+Each event contains the full `Browser` object as payload.
+
+---
+
+## Runtime Model
+
+- The service uses shared informers to watch `Browser` resources.
+- Events are broadcast to connected clients using an in-memory fan-out broadcaster.
+- No state is persisted outside of Kubernetes.
+- All writes are forwarded directly to the Kubernetes API server.
+
+---
+
+## Health Endpoint
+
+```http
+GET /healthz
 ```
 
-### Health
-`GET /healthz` returns `ok` with status `200`.
+Returns `200 OK` when the service is running.
 
-## Errors
-Errors are returned as JSON:
-```json
-{
-  "error": "Bad Request",
-  "message": "namespace must be provided",
-  "details": "<optional error string>"
-}
-```
-
-`IsNotFound` from Kubernetes is mapped to `204 No Content` in Get/Delete.
-
-## Browser client library
-The Go client lives in `pkg/client` and provides:
-- Create/Get/Delete/List operations.
-- Event stream helper via `Events(ctx, namespace)`.
-- Structured errors via `APIError`.
-
-Minimal example:
-```go
-cfg := client.ClientConfig{BaseURL: "http://browser-service:8080"}
-c, _ := client.NewClient(cfg)
-
-ctx := context.Background()
-
-browser := &browserv1.Browser{
-  Spec: browserv1.BrowserSpec{
-    BrowserName:    "chrome",
-    BrowserVersion: "122.0",
-  },
-}
-
-created, _ := c.CreateBrowser(ctx, "default", browser)
-_ = created
-```
+---
 
 ## Build and image workflow
 
@@ -145,18 +106,102 @@ The project is built and packaged entirely via Docker. Local Go installation is 
 The build process is controlled via the following Makefile variables:
 
 Variable	Description
-- BINARY_NAME	Name of the produced binary (browser-service).
-- DOCKER_REGISTRY	Docker registry prefix (passed via environment).
-- IMAGE_NAME	Full image name (<registry>/browser-service).
-- VERSION	Image version/tag (default: :v0.0.1).
+- BINARY_NAME	Name of the produced binary (selenosis).
+- REGISTRY	Docker registry prefix (default: localhost:5000).
+- IMAGE_NAME	Full image name (<registry>/selenosis).
+- VERSION	Image version/tag (default: develop).
 - PLATFORM	Target platform (default: linux/amd64).
+- CONTAINER_TOOL docker cmd
 
-DOCKER_REGISTRY is expected to be provided externally, which allows the same Makefile to be used locally and in CI.
+REGISTRY, VERSION is expected to be provided externally, which allows the same Makefile to be used locally and in CI.
 
 ## Deployment
 
-To be added....
+Minimal configuration
 
-## Notes
-- The service is stateless and can be scaled horizontally.
-- It depends on the Browser Controller to reconcile `Browser` CRs into actual pods.
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: browser-service
+  namespace: default
+```
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: browser-service
+rules:
+  - apiGroups: ["selenosis.io"]
+    resources: ["browsers"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+```
+
+``` yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: browser-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: browser-service
+subjects:
+- kind: ServiceAccount
+  name: browser-service
+  namespace: default
+```
+
+``` yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-service
+  labels:
+    role: browser-service
+spec:
+  type: NodePort
+  selector:
+    role: browser-service
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+
+```
+
+``` yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-service
+  labels:
+    role: browser-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: browser-service
+  template:
+    metadata:
+      labels:
+        role: browser-service
+    spec:
+      serviceAccountName: browser-service
+      containers:
+      - name: service
+        image: alcounit/browser-service:latest
+        imagePullPolicy: IfNotPresent
+        args:
+          - "--listen=:8080"
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+```
