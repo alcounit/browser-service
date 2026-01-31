@@ -155,6 +155,28 @@ func TestHandleResponseInvalidJSONError(t *testing.T) {
 	}
 }
 
+func TestHandleResponseEmptyErrorBody(t *testing.T) {
+	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
+		return response(http.StatusInternalServerError, ""), nil
+	})
+
+	_, err := client.GetBrowser(context.Background(), "default", "name")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if apiErr.Response == nil || apiErr.Response.Error != "Unknown error" {
+		t.Fatalf("unexpected API error response: %+v", apiErr.Response)
+	}
+	if apiErr.Response.Message != "" {
+		t.Fatalf("expected empty message, got %q", apiErr.Response.Message)
+	}
+}
+
 func TestHandleResponseJSONError(t *testing.T) {
 	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
 		body, _ := json.Marshal(&ErrorResponse{Error: "bad", Message: "nope", Details: "details"})
@@ -258,6 +280,38 @@ func TestEventsSuccess(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
+	}
+
+	stream.Close()
+}
+
+func TestEventsWithBrowserNameOption(t *testing.T) {
+	var gotQuery string
+
+	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
+		gotQuery = req.URL.RawQuery
+		body, _ := json.Marshal(event.BrowserEvent{
+			EventType: event.EventTypeAdded,
+			Browser:   &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "one"}},
+		})
+		resp := response(http.StatusOK, string(body))
+		resp.Header.Set("Content-Type", "text/event-stream")
+		return resp, nil
+	})
+
+	stream, err := client.Events(context.Background(), "default", WithBrowserName("one"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-stream.Events():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event")
+	}
+
+	if !strings.Contains(gotQuery, "name=one") {
+		t.Fatalf("expected name filter in query, got %q", gotQuery)
 	}
 
 	stream.Close()
