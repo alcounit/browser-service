@@ -62,6 +62,10 @@ All APIs are namespaced.
 - `GET    /api/v1/namespaces/{namespace}/events`  
   Stream browser events (server-sent events over HTTP)
 
+  Query parameters (optional):
+  - `name` — filter events by browser name.  
+    When specified, only events related to the given browser are streamed.
+
 ---
 
 ## Browser Events

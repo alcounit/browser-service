@@ -74,6 +74,14 @@ func TestCreateBrowserMissingSpecFields(t *testing.T) {
 	if rw.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", rw.Code)
 	}
+
+	var got map[string]string
+	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got["message"] != "requered field is empty" {
+		t.Fatalf("unexpected message: %q", got["message"])
+	}
 }
 
 func TestCreateBrowserClientError(t *testing.T) {
@@ -370,6 +378,46 @@ func TestBrowserEventsSuccess(t *testing.T) {
 
 	if !bytes.Contains(rw.Bytes(), []byte(`"eventType"`)) {
 		t.Fatalf("expected event JSON, got %s", rw.String())
+	}
+}
+
+func TestBrowserEventsNameFilter(t *testing.T) {
+	b := broadcast.NewBroadcaster[event.BrowserEvent](2)
+	svc := NewBrowserService(nil, nil, b)
+
+	req := newRequestWithParams(http.MethodGet, "/api/v1/namespaces/default/events?name=target", nil, map[string]string{"namespace": "default"})
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	rw := &recordingResponseWriter{header: make(http.Header)}
+	done := make(chan struct{})
+
+	go func() {
+		svc.BrowserEvents(rw, req)
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	b.Broadcast(event.BrowserEvent{EventType: event.EventTypeAdded, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "other"}}})
+
+	if waitFor(func() bool { return rw.Len() > 0 }, 150*time.Millisecond) {
+		cancel()
+		t.Fatal("unexpected event write for non-matching name")
+	}
+
+	b.Broadcast(event.BrowserEvent{EventType: event.EventTypeAdded, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "target"}}})
+
+	if !waitFor(func() bool { return rw.Len() > 0 }, 2*time.Second) {
+		cancel()
+		t.Fatal("timed out waiting for matching event")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler to exit")
 	}
 }
 

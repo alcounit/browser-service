@@ -46,6 +46,16 @@ func (s *browserEventStream) Close() {
 	s.cancel()
 }
 
+type EventsOption func(v url.Values)
+
+func WithBrowserName(name string) EventsOption {
+	return func(v url.Values) {
+		if name != "" {
+			v.Set("name", name)
+		}
+	}
+}
+
 type Client interface {
 	CreateBrowser(ctx context.Context, namespace string, browser *browserv1.Browser) (*browserv1.Browser, error)
 
@@ -55,7 +65,7 @@ type Client interface {
 
 	ListBrowsers(ctx context.Context, namespace string) ([]*browserv1.Browser, error)
 
-	Events(ctx context.Context, namespace string) (BrowserEventStream, error)
+	Events(ctx context.Context, namespace string, opts ...EventsOption) (BrowserEventStream, error)
 }
 
 type browserClient struct {
@@ -283,7 +293,7 @@ func (c *browserClient) ListBrowsers(ctx context.Context, namespace string) ([]*
 	return result, nil
 }
 
-func (c *browserClient) Events(ctx context.Context, namespace string) (BrowserEventStream, error) {
+func (c *browserClient) Events(ctx context.Context, namespace string, opts ...EventsOption) (BrowserEventStream, error) {
 	if namespace == "" {
 		return nil, fmt.Errorf("namespace is required")
 	}
@@ -303,13 +313,23 @@ func (c *browserClient) Events(ctx context.Context, namespace string) (BrowserEv
 		defer close(eventCh)
 		defer close(errCh)
 
-		url := fmt.Sprintf(
-			"%s/api/v1/namespaces/%s/events",
-			c.config.BaseURL,
-			namespace,
-		)
+		baseURL, err := url.Parse(c.config.BaseURL)
+		if err != nil {
+			errCh <- fmt.Errorf("invalid base URL: %w", err)
+			return
+		}
 
-		req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, url, nil)
+		baseURL.Path = fmt.Sprintf("/api/v1/namespaces/%s/events", namespace)
+
+		if opts != nil {
+			query := baseURL.Query()
+			for _, opt := range opts {
+				opt(query)
+			}
+			baseURL.RawQuery = query.Encode()
+		}
+
+		req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, baseURL.String(), nil)
 		if err != nil {
 			errCh <- err
 			return

@@ -185,6 +185,11 @@ func (s *BrowserService) BrowserEvents(rw http.ResponseWriter, req *http.Request
 
 	log = log.With().Str("namespace", namespace).Logger()
 
+	nameFilter := req.URL.Query().Get("name")
+	if nameFilter != "" {
+		log = log.With().Str("name", nameFilter).Logger()
+	}
+
 	flusher, ok := rw.(http.Flusher)
 	if !ok {
 		log.Error().Msg("response writer does not support http.Flusher")
@@ -210,6 +215,16 @@ func (s *BrowserService) BrowserEvents(rw http.ResponseWriter, req *http.Request
 				log.Info().Msg("browser events channel closed")
 				flusher.Flush()
 				return
+			}
+
+			if event.Browser == nil {
+				continue
+			}
+
+			if nameFilter != "" {
+				if event.Browser.GetName() != nameFilter {
+					continue
+				}
 			}
 
 			rw.Header().Set("Content-Type", "application/json")

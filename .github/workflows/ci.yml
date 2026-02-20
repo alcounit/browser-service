@@ -62,16 +62,9 @@ jobs:
           REGISTRY: ${{ secrets.REGISTRY }}
           VERSION: ${{ steps.meta.outputs.version }}
           PLATFORM: linux/amd64
+          EXTRA_TAGS: -t ${{ secrets.REGISTRY }}/browser-service:latest
         run: |
           make deploy
-
-      - name: Tag image as latest
-        env:
-          REGISTRY: ${{ secrets.REGISTRY }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          docker tag ${REGISTRY}/browser-service:${VERSION} ${REGISTRY}/browser-service:latest
-          docker push ${REGISTRY}/browser-service:latest
 
       - name: Summary
         env:
