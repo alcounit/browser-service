@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -257,11 +258,12 @@ func TestEventsSuccess(t *testing.T) {
 	}
 	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
 		var buf bytes.Buffer
-		enc := json.NewEncoder(&buf)
 		for _, evt := range events {
-			if err := enc.Encode(evt); err != nil {
+			data, err := json.Marshal(evt)
+			if err != nil {
 				t.Fatalf("encode error: %v", err)
 			}
+			fmt.Fprintf(&buf, "data: %s\n\n", data)
 		}
 		resp := response(http.StatusOK, buf.String())
 		resp.Header.Set("Content-Type", "text/event-stream")
@@ -294,7 +296,7 @@ func TestEventsWithBrowserNameOption(t *testing.T) {
 			EventType: event.EventTypeAdded,
 			Browser:   &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "one"}},
 		})
-		resp := response(http.StatusOK, string(body))
+		resp := response(http.StatusOK, fmt.Sprintf("data: %s\n\n", body))
 		resp.Header.Set("Content-Type", "text/event-stream")
 		return resp, nil
 	})
@@ -394,7 +396,7 @@ func TestEventsHTTPError(t *testing.T) {
 
 func TestEventsDecodeError(t *testing.T) {
 	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		resp := response(http.StatusOK, "not-json")
+		resp := response(http.StatusOK, "data: not-json\n\n")
 		resp.Header.Set("Content-Type", "text/event-stream")
 		return resp, nil
 	})

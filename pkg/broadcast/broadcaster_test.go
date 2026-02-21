@@ -38,6 +38,24 @@ func TestBroadcastNonBlockingDropsWhenFull(t *testing.T) {
 	}
 }
 
+func TestBroadcastDisconnectsSlowSubscriber(t *testing.T) {
+	b := NewBroadcaster[int](1)
+	ch := b.Subscribe()
+
+	b.Broadcast(1)
+	b.Broadcast(2)
+
+	_, ok := <-ch
+	if !ok {
+		t.Fatal("expected to read buffered event before close")
+	}
+
+	_, ok = <-ch
+	if ok {
+		t.Fatal("expected channel to be closed after slow subscriber disconnect")
+	}
+}
+
 func TestUnsubscribeUnknownChannelNoPanic(t *testing.T) {
 	b := NewBroadcaster[int](1)
 	ch := make(chan int, 1)

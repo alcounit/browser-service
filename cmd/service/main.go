@@ -26,6 +26,11 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+const (
+	broadcasterBufSize = 256
+	broadcastQueueSize = 1024
+)
+
 func main() {
 	var kubeconfig string
 	var masterURL string
@@ -52,16 +57,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	factory := externalversions.NewSharedInformerFactory(cs, 10*time.Second)
+	factory := externalversions.NewSharedInformerFactory(cs, 1*time.Minute)
 	informer := factory.Selenosis().V1().Browsers().Informer()
-	broadcaster := broadcast.NewBroadcaster[event.BrowserEvent](16)
-
-	informer.AddEventHandler(browserEventHandler(broadcaster))
+	broadcaster := broadcast.NewBroadcaster[event.BrowserEvent](broadcasterBufSize)
 
 	lister := factory.Selenosis().V1().Browsers().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	queue := startBroadcastPipeline(ctx, broadcaster)
+	informer.AddEventHandler(browserEventHandler(queue))
 
 	factory.Start(ctx.Done())
 
@@ -103,8 +109,12 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10, // 64 KB; default 1 MB is excessive
 	}
 
 	go func() {
@@ -135,25 +145,78 @@ func buildConfig(masterURL, kubeconfig string) (*rest.Config, error) {
 	return rest.InClusterConfig()
 }
 
-func browserEventHandler(broadcaster broadcast.Broadcaster[event.BrowserEvent]) cache.ResourceEventHandler {
+func startBroadcastPipeline(ctx context.Context, b broadcast.Broadcaster[event.BrowserEvent]) chan<- event.BrowserEvent {
+	queue := make(chan event.BrowserEvent, broadcastQueueSize)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-queue:
+				if !ok {
+					return
+				}
+				b.Broadcast(evt)
+			}
+		}
+	}()
+	return queue
+}
+
+func browserEventHandler(queue chan<- event.BrowserEvent) cache.ResourceEventHandler {
+	send := func(evt event.BrowserEvent) {
+		select {
+		case queue <- evt:
+		default:
+		}
+	}
+
 	return &cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
-			browser := obj.(*browserv1.Browser)
-			broadcaster.Broadcast(event.BrowserEvent{
+			browser, ok := obj.(*browserv1.Browser)
+			if !ok {
+				return
+			}
+
+			send(event.BrowserEvent{
 				EventType: event.EventTypeAdded,
 				Browser:   browser.DeepCopy(),
 			})
 		},
 		UpdateFunc: func(oldObj, newObj any) {
-			browser := newObj.(*browserv1.Browser)
-			broadcaster.Broadcast(event.BrowserEvent{
+			old, ok := oldObj.(*browserv1.Browser)
+			if !ok {
+				return
+			}
+
+			new, ok := newObj.(*browserv1.Browser)
+			if !ok {
+				return
+			}
+
+			if old.ResourceVersion == new.ResourceVersion {
+				return
+			}
+
+			send(event.BrowserEvent{
 				EventType: event.EventTypeModified,
-				Browser:   browser.DeepCopy(),
+				Browser:   new.DeepCopy(),
 			})
 		},
 		DeleteFunc: func(obj any) {
-			browser := obj.(*browserv1.Browser)
-			broadcaster.Broadcast(event.BrowserEvent{
+			browser, ok := obj.(*browserv1.Browser)
+			if !ok {
+				tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+				if !ok {
+					return
+				}
+
+				browser, ok = tombstone.Obj.(*browserv1.Browser)
+				if !ok {
+					return
+				}
+			}
+			send(event.BrowserEvent{
 				EventType: event.EventTypeDeleted,
 				Browser:   browser.DeepCopy(),
 			})
