@@ -58,10 +58,10 @@ func main() {
 	}
 
 	factory := externalversions.NewSharedInformerFactory(cs, 1*time.Minute)
-	informer := factory.Selenosis().V1().Browsers().Informer()
+	informer := factory.Browser().V1().Browsers().Informer()
 	broadcaster := broadcast.NewBroadcaster[event.BrowserEvent](broadcasterBufSize)
 
-	lister := factory.Selenosis().V1().Browsers().Lister()
+	lister := factory.Browser().V1().Browsers().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -63,7 +63,7 @@ func (s *BrowserService) CreateBrowser(rw http.ResponseWriter, req *http.Request
 		return
 	}
 
-	result, err := s.client.SelenosisV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
+	result, err := s.client.BrowserV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
 	if err != nil {
 		log.Err(err).Msg("failed to create browser")
 		writeErrorResponse(rw, http.StatusInternalServerError, "failed to create browser", err)
@@ -119,7 +119,7 @@ func (s *BrowserService) DeleteBrowser(rw http.ResponseWriter, req *http.Request
 
 	log = log.With().Str("namespace", namespace).Str("name", name).Logger()
 
-	if err := s.client.SelenosisV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
+	if err := s.client.BrowserV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
 		if apierr.IsNotFound(err) {
 			rw.WriteHeader(http.StatusNoContent)
 			log.Warn().Msg("browser not found, nothing to delete")
