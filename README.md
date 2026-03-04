@@ -121,6 +121,4 @@ REGISTRY, VERSION is expected to be provided externally, which allows the same M
 
 ## Deployment
 
-## Deployment
-
 Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
