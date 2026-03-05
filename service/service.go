@@ -2,7 +2,7 @@ package service
 
 import (
 	"encoding/json"
-
+	"fmt"
 	"net/http"
 
 	apierr "k8s.io/apimachinery/pkg/api/errors"
@@ -59,11 +59,11 @@ func (s *BrowserService) CreateBrowser(rw http.ResponseWriter, req *http.Request
 
 	if browser.Spec.BrowserName == "" || browser.Spec.BrowserVersion == "" {
 		log.Error().Msg("failed to create browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "requered field is empty", nil)
+		writeErrorResponse(rw, http.StatusInternalServerError, "required field is empty", nil)
 		return
 	}
 
-	result, err := s.client.SelenosisV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
+	result, err := s.client.BrowserV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
 	if err != nil {
 		log.Err(err).Msg("failed to create browser")
 		writeErrorResponse(rw, http.StatusInternalServerError, "failed to create browser", err)
@@ -119,7 +119,7 @@ func (s *BrowserService) DeleteBrowser(rw http.ResponseWriter, req *http.Request
 
 	log = log.With().Str("namespace", namespace).Str("name", name).Logger()
 
-	if err := s.client.SelenosisV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
+	if err := s.client.BrowserV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
 		if apierr.IsNotFound(err) {
 			rw.WriteHeader(http.StatusNoContent)
 			log.Warn().Msg("browser not found, nothing to delete")
@@ -165,11 +165,6 @@ func (s *BrowserService) ListBrowsers(rw http.ResponseWriter, req *http.Request)
 	log.Info().Int("count", len(browsers)).Msg("browsers listed successfully")
 
 	rw.Header().Set("Content-Type", "application/json")
-	if len(browsers) < 1 {
-		json.NewEncoder(rw).Encode([]*browserv1.Browser{})
-		return
-	}
-
 	json.NewEncoder(rw).Encode(browsers)
 }
 
@@ -227,13 +222,12 @@ func (s *BrowserService) BrowserEvents(rw http.ResponseWriter, req *http.Request
 				}
 			}
 
-			rw.Header().Set("Content-Type", "application/json")
-			err := json.NewEncoder(rw).Encode(event)
+			data, err := json.Marshal(event)
 			if err != nil {
 				log.Err(err).Msg("failed to encode browser event")
-				flusher.Flush()
-				continue
+				return
 			}
+			fmt.Fprintf(rw, "data: %s\n\n", data)
 			flusher.Flush()
 		}
 	}

@@ -79,7 +79,7 @@ func TestCreateBrowserMissingSpecFields(t *testing.T) {
 	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if got["message"] != "requered field is empty" {
+	if got["message"] != "required field is empty" {
 		t.Fatalf("unexpected message: %q", got["message"])
 	}
 }

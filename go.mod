@@ -3,7 +3,7 @@ module github.com/alcounit/browser-service
 go 1.25.0
 
 require (
-	github.com/alcounit/browser-controller v0.0.4
+	github.com/alcounit/browser-controller v0.0.6
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.34.0

@@ -46,12 +46,17 @@ func (b *broadcaster[T]) Unsubscribe(ch chan T) {
 
 func (b *broadcaster[T]) Broadcast(event T) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
+	var slow []chan T
 	for ch := range b.clients {
 		select {
 		case ch <- event:
 		default:
+			slow = append(slow, ch)
 		}
+	}
+	b.mu.RUnlock()
+
+	for _, ch := range slow {
+		b.Unsubscribe(ch)
 	}
 }

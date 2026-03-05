@@ -1,14 +1,15 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
@@ -350,20 +351,19 @@ func (c *browserClient) Events(ctx context.Context, namespace string, opts ...Ev
 			return
 		}
 
-		decoder := json.NewDecoder(resp.Body)
+		const sseDataPrefix = "data: "
 
-		for {
-			select {
-			case <-streamCtx.Done():
-				return
-			default:
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MB — under large CRD objects
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, sseDataPrefix) {
+				continue // skip empty lines, event:, id:, comments
 			}
 
 			var evt event.BrowserEvent
-			if err := decoder.Decode(&evt); err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
-					return
-				}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, sseDataPrefix)), &evt); err != nil {
 				errCh <- err
 				return
 			}
@@ -373,6 +373,10 @@ func (c *browserClient) Events(ctx context.Context, namespace string, opts ...Ev
 			case <-streamCtx.Done():
 				return
 			}
+		}
+
+		if err := scanner.Err(); err != nil && streamCtx.Err() == nil {
+			errCh <- err
 		}
 	}()
 
