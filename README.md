@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service)
+
 # Browser Service
 
 Browser Service is an HTTP API and event streaming layer for the **Selenosis** ecosystem.  
