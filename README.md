@@ -1,4 +1,4 @@
-[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service)
+[![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-service.svg)](https://hub.docker.com/r/alcounit/browser-service)
 
 # Browser Service
 
