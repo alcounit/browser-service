@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,11 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
-	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
-	"github.com/alcounit/browser-service/pkg/event"
 	"github.com/rs/zerolog"
 )
 
@@ -23,64 +19,18 @@ type ClientConfig struct {
 	Logger     zerolog.Logger
 }
 
-type BrowserEventStream interface {
-	Events() <-chan *event.BrowserEvent
-	Errors() <-chan error
-	Close()
+type RestClient struct {
+	Config ClientConfig
 }
 
-type browserEventStream struct {
-	eventCh chan *event.BrowserEvent
-	errCh   chan error
-	cancel  context.CancelFunc
-}
-
-func (s *browserEventStream) Events() <-chan *event.BrowserEvent {
-	return s.eventCh
-}
-
-func (s *browserEventStream) Errors() <-chan error {
-	return s.errCh
-}
-
-func (s *browserEventStream) Close() {
-	s.cancel()
-}
-
-type EventsOption func(v url.Values)
-
-func WithBrowserName(name string) EventsOption {
-	return func(v url.Values) {
-		if name != "" {
-			v.Set("name", name)
-		}
-	}
-}
-
-type Client interface {
-	CreateBrowser(ctx context.Context, namespace string, browser *browserv1.Browser) (*browserv1.Browser, error)
-
-	GetBrowser(ctx context.Context, namespace, name string) (*browserv1.Browser, error)
-
-	DeleteBrowser(ctx context.Context, namespace, name string) error
-
-	ListBrowsers(ctx context.Context, namespace string) ([]*browserv1.Browser, error)
-
-	Events(ctx context.Context, namespace string, opts ...EventsOption) (BrowserEventStream, error)
-}
-
-type browserClient struct {
-	config ClientConfig
-}
-
-func NewClient(config ClientConfig) (Client, error) {
+func NewRestClient(config ClientConfig) (*RestClient, error) {
 	if config.BaseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
 
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{
-			Timeout: 0 * time.Second,
+			Timeout: 10 * time.Second,
 		}
 	}
 
@@ -88,9 +38,67 @@ func NewClient(config ClientConfig) (Client, error) {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
 
-	return &browserClient{
-		config: config,
-	}, nil
+	return &RestClient{Config: config}, nil
+}
+
+func (c *RestClient) DoRequest(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	var reqBody io.Reader
+	if body != nil {
+		bodyBytes, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		reqBody = bytes.NewReader(bodyBytes)
+	}
+
+	rawURL := c.Config.BaseURL + path
+
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+
+	c.Config.Logger.Debug().Str("method", method).Str("url", rawURL).Msg("making API request")
+
+	resp, err := c.Config.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *RestClient) HandleResponse(resp *http.Response, result any) error {
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(body, &errResp); err != nil {
+			return &APIError{
+				StatusCode: resp.StatusCode,
+				Response:   &ErrorResponse{Error: "Unknown error", Message: string(body)},
+			}
+		}
+		return &APIError{StatusCode: resp.StatusCode, Response: &errResp}
+	}
+
+	if result != nil && len(body) > 0 {
+		if err := json.Unmarshal(body, result); err != nil {
+			return fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+	}
+
+	return nil
 }
 
 type ErrorResponse struct {
@@ -123,262 +131,4 @@ func IsNotFound(err error) bool {
 		return apiErr.StatusCode == http.StatusNotFound
 	}
 	return false
-}
-
-func (c *browserClient) doRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
-	var reqBody io.Reader
-	if body != nil {
-		bodyBytes, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		reqBody = bytes.NewReader(bodyBytes)
-	}
-
-	url := c.config.BaseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-
-	c.config.Logger.Debug().
-		Str("method", method).
-		Str("url", url).
-		Msg("making API request")
-
-	resp, err := c.config.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	return resp, nil
-}
-
-func (c *browserClient) handleResponse(resp *http.Response, result interface{}) error {
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		var errorResp ErrorResponse
-		if err := json.Unmarshal(body, &errorResp); err != nil {
-			return &APIError{
-				StatusCode: resp.StatusCode,
-				Response:   &ErrorResponse{Error: "Unknown error", Message: string(body)},
-			}
-		}
-		return &APIError{
-			StatusCode: resp.StatusCode,
-			Response:   &errorResp,
-		}
-	}
-
-	if result != nil && len(body) > 0 {
-		if err := json.Unmarshal(body, result); err != nil {
-			return fmt.Errorf("failed to unmarshal response: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (c *browserClient) CreateBrowser(ctx context.Context, namespace string, browser *browserv1.Browser) (*browserv1.Browser, error) {
-	if namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
-	}
-	if browser == nil {
-		return nil, fmt.Errorf("browser is required")
-	}
-
-	path := fmt.Sprintf("/api/v1/namespaces/%s/browsers", namespace)
-
-	resp, err := c.doRequest(ctx, http.MethodPost, path, browser)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create browser: %w", err)
-	}
-
-	var result browserv1.Browser
-	if err := c.handleResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	c.config.Logger.Info().
-		Str("namespace", namespace).
-		Str("browserName", result.Name).
-		Msg("browser created successfully")
-
-	return &result, nil
-}
-
-func (c *browserClient) GetBrowser(ctx context.Context, namespace, name string) (*browserv1.Browser, error) {
-	if namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
-	}
-	if name == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-
-	path := fmt.Sprintf("/api/v1/namespaces/%s/browsers/%s", namespace, name)
-
-	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get browser: %w", err)
-	}
-
-	var result browserv1.Browser
-	if err := c.handleResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-func (c *browserClient) DeleteBrowser(ctx context.Context, namespace, name string) error {
-	if namespace == "" {
-		return fmt.Errorf("namespace is required")
-	}
-	if name == "" {
-		return fmt.Errorf("name is required")
-	}
-
-	path := fmt.Sprintf("/api/v1/namespaces/%s/browsers/%s", namespace, name)
-
-	resp, err := c.doRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return fmt.Errorf("failed to delete browser: %w", err)
-	}
-
-	if err := c.handleResponse(resp, nil); err != nil {
-		return err
-	}
-
-	c.config.Logger.Info().
-		Str("namespace", namespace).
-		Str("browserName", name).
-		Msg("browser deleted successfully")
-
-	return nil
-}
-
-func (c *browserClient) ListBrowsers(ctx context.Context, namespace string) ([]*browserv1.Browser, error) {
-	if namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
-	}
-
-	path := fmt.Sprintf("/api/v1/namespaces/%s/browsers", namespace)
-
-	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list browsers: %w", err)
-	}
-
-	var result []*browserv1.Browser
-	if err := c.handleResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	c.config.Logger.Debug().
-		Str("namespace", namespace).
-		Int("count", len(result)).
-		Msg("browsers listed successfully")
-
-	return result, nil
-}
-
-func (c *browserClient) Events(ctx context.Context, namespace string, opts ...EventsOption) (BrowserEventStream, error) {
-	if namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
-	}
-
-	streamCtx, cancel := context.WithCancel(ctx)
-
-	eventCh := make(chan *event.BrowserEvent, 16)
-	errCh := make(chan error, 1)
-
-	stream := &browserEventStream{
-		eventCh: eventCh,
-		errCh:   errCh,
-		cancel:  cancel,
-	}
-
-	go func() {
-		defer close(eventCh)
-		defer close(errCh)
-
-		baseURL, err := url.Parse(c.config.BaseURL)
-		if err != nil {
-			errCh <- fmt.Errorf("invalid base URL: %w", err)
-			return
-		}
-
-		baseURL.Path = fmt.Sprintf("/api/v1/namespaces/%s/events", namespace)
-
-		if opts != nil {
-			query := baseURL.Query()
-			for _, opt := range opts {
-				opt(query)
-			}
-			baseURL.RawQuery = query.Encode()
-		}
-
-		req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, baseURL.String(), nil)
-		if err != nil {
-			errCh <- err
-			return
-		}
-
-		req.Header.Set("Accept", "text/event-stream")
-
-		resp, err := c.config.HTTPClient.Do(req)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			errCh <- fmt.Errorf("events stream failed (%d): %s", resp.StatusCode, body)
-			return
-		}
-
-		const sseDataPrefix = "data: "
-
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MB — under large CRD objects
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, sseDataPrefix) {
-				continue // skip empty lines, event:, id:, comments
-			}
-
-			var evt event.BrowserEvent
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, sseDataPrefix)), &evt); err != nil {
-				errCh <- err
-				return
-			}
-
-			select {
-			case eventCh <- &evt:
-			case <-streamCtx.Done():
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil && streamCtx.Err() == nil {
-			errCh <- err
-		}
-	}()
-
-	return stream, nil
 }

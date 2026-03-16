@@ -2,27 +2,27 @@
 
 # Browser Service
 
-Browser Service is an HTTP API and event streaming layer for the **Selenosis** ecosystem.  
-It provides a REST interface and real-time events on top of the `Browser` resources managed by **browser-controller**.
+Browser Service is an HTTP API and event streaming layer for the **Selenosis** ecosystem.
+It provides a REST interface and real-time events on top of the `Browser` and `BrowserConfig` resources managed by **browser-controller**.
 
-This service does **not** create Pods directly. Instead, it operates as a client-facing facade over Kubernetes `Browser` CRDs.
+This service does **not** create Pods directly. Instead, it operates as a client-facing facade over Kubernetes CRDs.
 
 ---
 
 ## Overview
 
-- **Browser Service** exposes CRUD and event APIs for browser instances.
+- **Browser Service** exposes CRUD and event APIs for browser instances and their configurations.
 - **browser-controller** is responsible for reconciliation and Pod lifecycle.
-- **Browser CRD** is the shared contract between the service and the controller.
+- **Browser** and **BrowserConfig** CRDs are the shared contract between the service and the controller.
 
-The service watches `Browser` resources and streams lifecycle events to clients.
+The service watches both `Browser` and `BrowserConfig` resources and streams lifecycle events to clients.
 
 ---
 
 ## Responsibilities
 
-- Expose HTTP API for managing `Browser` resources
-- Stream browser lifecycle events (ADDED / MODIFIED / DELETED)
+- Expose HTTP API for managing `Browser` and `BrowserConfig` resources
+- Stream lifecycle events (ADDED / MODIFIED / DELETED) for both resource types
 - Provide read-only access to `Browser.status`
 - Act as a thin abstraction over Kubernetes APIs
 
@@ -32,7 +32,7 @@ The service watches `Browser` resources and streams lifecycle events to clients.
 
 Browser Service **depends on browser-controller** for:
 
-- `Browser` CRD definitions
+- `Browser` and `BrowserConfig` CRD definitions
 - Generated clientsets, informers, and listers
 - Actual browser Pod creation and lifecycle management
 
@@ -46,33 +46,53 @@ The service assumes that:
 
 All APIs are namespaced.
 
+### Browser endpoints
 
-### Endpoints
-
-- `POST   /api/v1/namespaces/{namespace}/browsers`  
+- `POST   /api/v1/namespaces/{namespace}/browsers`
   Create a new `Browser`
 
-- `GET    /api/v1/namespaces/{namespace}/browsers/{name}`  
+- `GET    /api/v1/namespaces/{namespace}/browsers/{name}`
   Get a single `Browser`
 
-- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}`  
+- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}`
   Delete a `Browser`
 
-- `GET    /api/v1/namespaces/{namespace}/browsers`  
+- `GET    /api/v1/namespaces/{namespace}/browsers`
   List all Browsers in a namespace
 
-- `GET    /api/v1/namespaces/{namespace}/events`  
-  Stream browser events (server-sent events over HTTP)
+- `GET    /api/v1/namespaces/{namespace}/browsers/events`
+  Stream browser lifecycle events (server-sent events over HTTP)
 
   Query parameters (optional):
-  - `name` — filter events by browser name.  
+  - `name` — filter events by browser name.
     When specified, only events related to the given browser are streamed.
+
+### BrowserConfig endpoints
+
+- `POST   /api/v1/namespaces/{namespace}/browserconfigs`
+  Create a new `BrowserConfig`
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs/{name}`
+  Get a single `BrowserConfig`
+
+- `DELETE /api/v1/namespaces/{namespace}/browserconfigs/{name}`
+  Delete a `BrowserConfig`
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs`
+  List all BrowserConfigs in a namespace
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs/events`
+  Stream BrowserConfig lifecycle events (server-sent events over HTTP)
+
+  Query parameters (optional):
+  - `name` — filter events by BrowserConfig name.
+    When specified, only events related to the given BrowserConfig are streamed.
 
 ---
 
-## Browser Events
+## Events
 
-The service exposes a streaming endpoint backed by shared informers.
+Both resource types expose a streaming endpoint backed by shared informers.
 
 Event types:
 
@@ -80,14 +100,16 @@ Event types:
 - `MODIFIED`
 - `DELETED`
 
-Each event contains the full `Browser` object as payload.
+`Browser` events include the full `Browser` object as payload, including `status.phase` and `status.podIP`.
+`BrowserConfig` events include the full `BrowserConfig` object as payload.
 
 ---
 
 ## Runtime Model
 
-- The service uses shared informers to watch `Browser` resources.
+- The service uses shared informers to watch `Browser` and `BrowserConfig` resources.
 - Events are broadcast to connected clients using an in-memory fan-out broadcaster.
+- Subscribers can optionally provide a predicate to receive only events matching a specific resource name.
 - No state is persisted outside of Kubernetes.
 - All writes are forwarded directly to the Kubernetes API server.
 
@@ -111,15 +133,17 @@ The project is built and packaged entirely via Docker. Local Go installation is 
 
 The build process is controlled via the following Makefile variables:
 
-Variable	Description
-- BINARY_NAME	Name of the produced binary (selenosis).
-- REGISTRY	Docker registry prefix (default: localhost:5000).
-- IMAGE_NAME	Full image name (<registry>/selenosis).
-- VERSION	Image version/tag (default: develop).
-- PLATFORM	Target platform (default: linux/amd64).
-- CONTAINER_TOOL docker cmd
+| Variable         | Description                                                  |
+|------------------|--------------------------------------------------------------|
+| `BINARY_NAME`    | Name of the produced binary (fixed: `browser-service`)       |
+| `REGISTRY`       | Docker registry prefix (default: `localhost:5000`)           |
+| `IMAGE_NAME`     | Full image name, derived as `$(REGISTRY)/$(BINARY_NAME)`     |
+| `VERSION`        | Image version/tag (default: `develop`)                       |
+| `EXTRA_TAGS`     | Additional `-t` tags passed to `docker-push` (default: none) |
+| `PLATFORM`       | Target platform (default: `linux/amd64`)                     |
+| `CONTAINER_TOOL` | Container build tool (default: `docker`)                     |
 
-REGISTRY, VERSION is expected to be provided externally, which allows the same Makefile to be used locally and in CI.
+`REGISTRY` and `VERSION` are expected to be provided externally, which allows the same Makefile to be used locally and in CI.
 
 ## Deployment
 

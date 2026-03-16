@@ -1,6 +1,9 @@
 package broadcast
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestSubscribeBroadcastUnsubscribe(t *testing.T) {
 	b := NewBroadcaster[int](1)
@@ -53,6 +56,62 @@ func TestBroadcastDisconnectsSlowSubscriber(t *testing.T) {
 	_, ok = <-ch
 	if ok {
 		t.Fatal("expected channel to be closed after slow subscriber disconnect")
+	}
+}
+
+func TestConcurrentBroadcastUnsubscribeNoPanic(t *testing.T) {
+	const subscribers = 20
+	const broadcasts = 100
+
+	b := NewBroadcaster[int](1)
+
+	var wg sync.WaitGroup
+	for i := range subscribers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ch := b.Subscribe()
+			// drain so we don't become slow subscriber
+			go func() {
+				for range ch {
+				}
+			}()
+			if i%2 == 0 {
+				b.Unsubscribe(ch)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	var bwg sync.WaitGroup
+	for range broadcasts {
+		bwg.Add(1)
+		go func() {
+			defer bwg.Done()
+			b.Broadcast(1)
+		}()
+	}
+	bwg.Wait()
+}
+
+func TestSubscribeWithPredicateFiltersEvents(t *testing.T) {
+	b := NewBroadcaster[int](2)
+	ch := b.Subscribe(func(v int) bool { return v%2 == 0 })
+
+	b.Broadcast(1)
+	b.Broadcast(2)
+	b.Broadcast(3)
+	b.Broadcast(4)
+
+	b.Unsubscribe(ch)
+
+	var got []int
+	for v := range ch {
+		got = append(got, v)
+	}
+	if len(got) != 2 || got[0] != 2 || got[1] != 4 {
+		t.Fatalf("expected [2 4], got %v", got)
 	}
 }
 
