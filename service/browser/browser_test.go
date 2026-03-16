@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -262,8 +263,13 @@ func TestListEmpty(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rw.Code)
 	}
 
+	body := strings.TrimSpace(rw.Body.String())
+	if body == "null" {
+		t.Fatal("expected empty JSON array [], got null")
+	}
+
 	var got []*browserv1.Browser
-	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&got); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if len(got) != 0 {

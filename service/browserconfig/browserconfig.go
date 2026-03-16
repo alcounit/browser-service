@@ -161,6 +161,10 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if configs == nil {
+		configs = []*browserconfigv1.BrowserConfig{}
+	}
+
 	log.Info().Int("count", len(configs)).Msg("browser configs listed successfully")
 
 	rw.Header().Set("Content-Type", "application/json")

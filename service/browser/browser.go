@@ -158,6 +158,10 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if browsers == nil {
+		browsers = []*browserv1.Browser{}
+	}
+
 	log.Info().Int("count", len(browsers)).Msg("browsers listed successfully")
 
 	rw.Header().Set("Content-Type", "application/json")
