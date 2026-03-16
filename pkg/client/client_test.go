@@ -5,38 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
-
-	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
-	"github.com/alcounit/browser-service/pkg/event"
-	"github.com/rs/zerolog"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-func TestNewClientValidation(t *testing.T) {
-	_, err := NewClient(ClientConfig{})
-	if err == nil {
-		t.Fatal("expected error for missing base URL")
-	}
-
-	_, err = NewClient(ClientConfig{BaseURL: "http://[::1"})
-	if err == nil {
-		t.Fatal("expected error for invalid base URL")
-	}
-
-	c, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if c == nil {
-		t.Fatal("expected client instance")
-	}
-}
 
 func TestErrorResponseString(t *testing.T) {
 	resp := ErrorResponse{Error: "bad", Message: "oops"}
@@ -72,572 +45,241 @@ func TestIsNotFound(t *testing.T) {
 	}
 }
 
-func TestCreateBrowserSuccess(t *testing.T) {
-	var gotMethod, gotPath string
-	var gotBody browserv1.Browser
+func TestNewRestClientValidation(t *testing.T) {
+	_, err := NewRestClient(ClientConfig{})
+	if err == nil {
+		t.Fatal("expected error for missing base URL")
+	}
 
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		gotMethod = req.Method
-		gotPath = req.URL.Path
+	_, err = NewRestClient(ClientConfig{BaseURL: "http://[::1"})
+	if err == nil {
+		t.Fatal("expected error for invalid base URL")
+	}
 
-		body, _ := io.ReadAll(req.Body)
-		if err := json.Unmarshal(body, &gotBody); err != nil {
-			t.Fatalf("failed to unmarshal request: %v", err)
-		}
-
-		respBody, _ := json.Marshal(&gotBody)
-		return response(http.StatusOK, string(respBody)), nil
-	})
-
-	browser := &browserv1.Browser{}
-	browser.Name = "br"
-	browser.Spec.BrowserName = "chrome"
-	browser.Spec.BrowserVersion = "120"
-
-	result, err := client.CreateBrowser(context.Background(), "default", browser)
+	rc, err := NewRestClient(ClientConfig{BaseURL: "http://example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if rc == nil {
+		t.Fatal("expected non-nil RestClient")
+	}
+	if rc.Config.HTTPClient == nil {
+		t.Fatal("expected default HTTPClient to be set")
+	}
+}
+
+func TestDoRequestWithBody(t *testing.T) {
+	var gotMethod, gotContentType string
+	var gotBody []byte
+
+	transport := rtFunc(func(req *http.Request) (*http.Response, error) {
+		gotMethod = req.Method
+		gotContentType = req.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(req.Body)
+		return okResponse(`{}`), nil
+	})
+
+	rc := &RestClient{Config: ClientConfig{
+		BaseURL:    "http://example.com",
+		HTTPClient: &http.Client{Transport: transport},
+	}}
+
+	payload := map[string]string{"key": "value"}
+	resp, err := rc.DoRequest(context.Background(), http.MethodPost, "/path", payload)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
 
 	if gotMethod != http.MethodPost {
 		t.Fatalf("expected POST, got %s", gotMethod)
 	}
-	if gotPath != "/api/v1/namespaces/default/browsers" {
-		t.Fatalf("unexpected path: %s", gotPath)
-	}
-	if result.Name != "br" {
-		t.Fatalf("unexpected result name: %s", result.Name)
-	}
-}
-
-func TestCreateBrowserValidation(t *testing.T) {
-	client, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	if _, err := client.CreateBrowser(context.Background(), "", &browserv1.Browser{}); err == nil {
-		t.Fatal("expected error for missing namespace")
-	}
-	if _, err := client.CreateBrowser(context.Background(), "default", nil); err == nil {
-		t.Fatal("expected error for nil browser")
-	}
-}
-
-func TestCreateBrowserRequestError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("request failed")
-	})
-
-	_, err := client.CreateBrowser(context.Background(), "default", &browserv1.Browser{
-		Spec: browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "failed to create browser") {
-		t.Fatalf("expected wrapped error, got %v", err)
-	}
-}
-
-func TestHandleResponseInvalidJSONError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusInternalServerError, "broken"), nil
-	})
-
-	_, err := client.GetBrowser(context.Background(), "default", "name")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("expected APIError, got %T", err)
-	}
-	if apiErr.Response == nil || apiErr.Response.Error != "Unknown error" {
-		t.Fatalf("unexpected API error response: %+v", apiErr.Response)
-	}
-}
-
-func TestHandleResponseEmptyErrorBody(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusInternalServerError, ""), nil
-	})
-
-	_, err := client.GetBrowser(context.Background(), "default", "name")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("expected APIError, got %T", err)
-	}
-	if apiErr.Response == nil || apiErr.Response.Error != "Unknown error" {
-		t.Fatalf("unexpected API error response: %+v", apiErr.Response)
-	}
-	if apiErr.Response.Message != "" {
-		t.Fatalf("expected empty message, got %q", apiErr.Response.Message)
-	}
-}
-
-func TestHandleResponseJSONError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		body, _ := json.Marshal(&ErrorResponse{Error: "bad", Message: "nope", Details: "details"})
-		return response(http.StatusBadRequest, string(body)), nil
-	})
-
-	_, err := client.GetBrowser(context.Background(), "default", "name")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	apiErr, ok := err.(*APIError)
-	if !ok {
-		t.Fatalf("expected APIError, got %T", err)
-	}
-	if apiErr.Response == nil || apiErr.Response.Error != "bad" {
-		t.Fatalf("unexpected API error response: %+v", apiErr.Response)
-	}
-}
-
-func TestListBrowsersSuccess(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		body, _ := json.Marshal([]*browserv1.Browser{
-			{ObjectMeta: metav1.ObjectMeta{Name: "one"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "two"}},
-		})
-		return response(http.StatusOK, string(body)), nil
-	})
-
-	browsers, err := client.ListBrowsers(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(browsers) != 2 {
-		t.Fatalf("expected 2 browsers, got %d", len(browsers))
-	}
-}
-
-func TestListBrowsersRequestError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("request failed")
-	})
-
-	_, err := client.ListBrowsers(context.Background(), "default")
-	if err == nil || !strings.Contains(err.Error(), "failed to list browsers") {
-		t.Fatalf("expected wrapped error, got %v", err)
-	}
-}
-
-func TestDeleteBrowserSuccess(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodDelete {
-			t.Fatalf("expected DELETE, got %s", req.Method)
-		}
-		return response(http.StatusNoContent, ""), nil
-	})
-
-	if err := client.DeleteBrowser(context.Background(), "default", "name"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestDeleteBrowserRequestError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("request failed")
-	})
-
-	err := client.DeleteBrowser(context.Background(), "default", "name")
-	if err == nil || !strings.Contains(err.Error(), "failed to delete browser") {
-		t.Fatalf("expected wrapped error, got %v", err)
-	}
-}
-
-func TestEventsSuccess(t *testing.T) {
-	events := []event.BrowserEvent{
-		{EventType: event.EventTypeAdded, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "one"}}},
-		{EventType: event.EventTypeDeleted, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "two"}}},
-	}
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		var buf bytes.Buffer
-		for _, evt := range events {
-			data, err := json.Marshal(evt)
-			if err != nil {
-				t.Fatalf("encode error: %v", err)
-			}
-			fmt.Fprintf(&buf, "data: %s\n\n", data)
-		}
-		resp := response(http.StatusOK, buf.String())
-		resp.Header.Set("Content-Type", "text/event-stream")
-		return resp, nil
-	})
-
-	stream, err := client.Events(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case evt := <-stream.Events():
-		if evt.Browser.Name != "one" || evt.EventType != event.EventTypeAdded {
-			t.Fatalf("unexpected event: %+v", evt)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for event")
-	}
-
-	stream.Close()
-}
-
-func TestEventsWithBrowserNameOption(t *testing.T) {
-	var gotQuery string
-
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		gotQuery = req.URL.RawQuery
-		body, _ := json.Marshal(event.BrowserEvent{
-			EventType: event.EventTypeAdded,
-			Browser:   &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "one"}},
-		})
-		resp := response(http.StatusOK, fmt.Sprintf("data: %s\n\n", body))
-		resp.Header.Set("Content-Type", "text/event-stream")
-		return resp, nil
-	})
-
-	stream, err := client.Events(context.Background(), "default", WithBrowserName("one"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case <-stream.Events():
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for event")
-	}
-
-	if !strings.Contains(gotQuery, "name=one") {
-		t.Fatalf("expected name filter in query, got %q", gotQuery)
-	}
-
-	stream.Close()
-}
-
-func TestEventsMissingNamespace(t *testing.T) {
-	client, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	if _, err := client.Events(context.Background(), ""); err == nil {
-		t.Fatal("expected error for missing namespace")
-	}
-}
-
-func TestEventsRequestError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("request failed")
-	})
-
-	stream, err := client.Events(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case err := <-stream.Errors():
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for error")
-	}
-}
-
-func TestEventsRequestCreateError(t *testing.T) {
-	client := &browserClient{
-		config: ClientConfig{
-			BaseURL:    "http://example.com\x7f",
-			HTTPClient: &http.Client{},
-			Logger:     zerolog.Nop(),
-		},
-	}
-
-	stream, err := client.Events(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case err := <-stream.Errors():
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for error")
-	}
-}
-
-func TestEventsHTTPError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusInternalServerError, "bad"), nil
-	})
-
-	stream, err := client.Events(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case err := <-stream.Errors():
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for error")
-	}
-}
-
-func TestEventsDecodeError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		resp := response(http.StatusOK, "data: not-json\n\n")
-		resp.Header.Set("Content-Type", "text/event-stream")
-		return resp, nil
-	})
-
-	stream, err := client.Events(context.Background(), "default")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	select {
-	case err := <-stream.Errors():
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for decode error")
-	}
-}
-
-func TestDoRequestSetsContentType(t *testing.T) {
-	var gotContentType string
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		gotContentType = req.Header.Get("Content-Type")
-		return response(http.StatusOK, `{}`), nil
-	})
-
-	_, err := client.CreateBrowser(context.Background(), "default", &browserv1.Browser{
-		Spec: browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
 	if gotContentType != "application/json" {
-		t.Fatalf("expected Content-Type application/json, got %q", gotContentType)
+		t.Fatalf("expected Content-Type application/json, got %s", gotContentType)
+	}
+	if !bytes.Contains(gotBody, []byte("value")) {
+		t.Fatal("expected body to contain payload")
 	}
 }
 
-func TestHandleResponseUnmarshalError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusOK, `{"name":`), nil
+func TestDoRequestWithoutBody(t *testing.T) {
+	var gotContentType string
+
+	transport := rtFunc(func(req *http.Request) (*http.Response, error) {
+		gotContentType = req.Header.Get("Content-Type")
+		return okResponse(`{}`), nil
 	})
 
-	_, err := client.GetBrowser(context.Background(), "default", "name")
-	if err == nil {
-		t.Fatal("expected unmarshal error")
-	}
-}
-
-func TestHandleResponseEmptyBodyWithResult(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusOK, ""), nil
-	})
-
-	result, err := client.GetBrowser(context.Background(), "default", "name")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestHandleResponseReadError(t *testing.T) {
-	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := io.NopCloser(errorReader{})
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       body,
-			Header:     make(http.Header),
-		}, nil
-	})
-
-	httpClient := &http.Client{Transport: transport}
-	client, err := NewClient(ClientConfig{
+	rc := &RestClient{Config: ClientConfig{
 		BaseURL:    "http://example.com",
-		HTTPClient: httpClient,
-	})
+		HTTPClient: &http.Client{Transport: transport},
+	}}
+
+	resp, err := rc.DoRequest(context.Background(), http.MethodGet, "/path", nil)
 	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
+	resp.Body.Close()
 
-	_, err = client.GetBrowser(context.Background(), "default", "name")
-	if err == nil {
-		t.Fatal("expected read error")
+	if gotContentType != "" {
+		t.Fatalf("expected no Content-Type for nil body, got %s", gotContentType)
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
-func newClientWithTransport(t *testing.T, rt roundTripFunc) Client {
-	t.Helper()
-
-	client, err := NewClient(ClientConfig{
+func TestDoRequestMarshalError(t *testing.T) {
+	rc := &RestClient{Config: ClientConfig{
 		BaseURL:    "http://example.com",
-		HTTPClient: &http.Client{Transport: rt},
-		Logger:     zerolog.Nop(),
-	})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-	return client
-}
+		HTTPClient: &http.Client{},
+	}}
 
-func response(status int, body string) *http.Response {
-	return &http.Response{
-		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-	}
-}
-
-type errorReader struct{}
-
-func (errorReader) Read(p []byte) (int, error) {
-	return 0, errors.New("read failed")
-}
-
-func (errorReader) Close() error {
-	return nil
-}
-
-func TestDoRequestCreateRequestError(t *testing.T) {
-	client := &browserClient{
-		config: ClientConfig{
-			BaseURL: "http://example.com",
-			Logger:  zerolog.Nop(),
-		},
-	}
-
-	_, err := client.doRequest(context.Background(), "GET", " /bad", nil)
-	if err == nil {
-		t.Fatal("expected error for invalid request")
-	}
-}
-
-func TestHandleResponseNoBodyNoResult(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusOK, ""), nil
-	})
-
-	if err := client.DeleteBrowser(context.Background(), "default", "name"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestHandleResponseWithBodyNoResult(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusOK, `{"ok":true}`), nil
-	})
-
-	if err := client.DeleteBrowser(context.Background(), "default", "name"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestDoRequestBodyMarshalError(t *testing.T) {
-	client := &browserClient{
-		config: ClientConfig{
-			BaseURL: "http://example.com",
-			Logger:  zerolog.Nop(),
-		},
-	}
-
-	_, err := client.doRequest(context.Background(), http.MethodPost, "/path", struct {
-		Bad func()
-	}{Bad: func() {}})
+	_, err := rc.DoRequest(context.Background(), http.MethodPost, "/path", struct{ Bad func() }{Bad: func() {}})
 	if err == nil {
 		t.Fatal("expected marshal error")
 	}
 }
 
-func TestListBrowsersMissingNamespace(t *testing.T) {
-	client, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
+func TestDoRequestCreateError(t *testing.T) {
+	rc := &RestClient{Config: ClientConfig{
+		BaseURL:    "http://example.com",
+		HTTPClient: &http.Client{},
+	}}
 
-	if _, err := client.ListBrowsers(context.Background(), ""); err == nil {
-		t.Fatal("expected error for missing namespace")
+	_, err := rc.DoRequest(context.Background(), "GET", " /bad path", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid request URL")
 	}
 }
 
-func TestDeleteBrowserMissingParams(t *testing.T) {
-	client, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	if err := client.DeleteBrowser(context.Background(), "", "name"); err == nil {
-		t.Fatal("expected error for missing namespace")
-	}
-	if err := client.DeleteBrowser(context.Background(), "default", ""); err == nil {
-		t.Fatal("expected error for missing name")
-	}
-}
-
-func TestGetBrowserRequestError(t *testing.T) {
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("request failed")
+func TestDoRequestHTTPError(t *testing.T) {
+	transport := rtFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
 	})
 
-	_, err := client.GetBrowser(context.Background(), "default", "name")
-	if err == nil || !strings.Contains(err.Error(), "failed to get browser") {
-		t.Fatalf("expected wrapped error, got %v", err)
+	rc := &RestClient{Config: ClientConfig{
+		BaseURL:    "http://example.com",
+		HTTPClient: &http.Client{Transport: transport},
+	}}
+
+	_, err := rc.DoRequest(context.Background(), http.MethodGet, "/path", nil)
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	if !strings.Contains(err.Error(), "request failed") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 
-func TestGetBrowserMissingParams(t *testing.T) {
-	client, err := NewClient(ClientConfig{BaseURL: "http://example.com"})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
+func TestHandleResponseSuccess(t *testing.T) {
+	rc := &RestClient{}
 
-	if _, err := client.GetBrowser(context.Background(), "", "name"); err == nil {
-		t.Fatal("expected error for missing namespace")
-	}
-	if _, err := client.GetBrowser(context.Background(), "default", ""); err == nil {
-		t.Fatal("expected error for missing name")
-	}
-}
+	var result map[string]string
+	resp := okResponse(`{"key":"value"}`)
 
-func TestDoRequestWithBodyMarshals(t *testing.T) {
-	var gotBody bytes.Buffer
-	client := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
-		io.Copy(&gotBody, req.Body)
-		return response(http.StatusOK, `{}`), nil
-	})
-
-	_, err := client.CreateBrowser(context.Background(), "default", &browserv1.Browser{
-		Spec: browserv1.BrowserSpec{BrowserName: "chrome", BrowserVersion: "120"},
-	})
-	if err != nil {
+	if err := rc.HandleResponse(resp, &result); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if gotBody.Len() == 0 {
-		t.Fatal("expected request body to be written")
+	if result["key"] != "value" {
+		t.Fatalf("unexpected result: %v", result)
 	}
 }
+
+func TestHandleResponseNoResult(t *testing.T) {
+	rc := &RestClient{}
+	if err := rc.HandleResponse(okResponse(`{"key":"value"}`), nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResponseEmptyBody(t *testing.T) {
+	rc := &RestClient{}
+	var result map[string]string
+	if err := rc.HandleResponse(okResponse(""), &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleResponseUnmarshalError(t *testing.T) {
+	rc := &RestClient{}
+	var result map[string]string
+	if err := rc.HandleResponse(okResponse(`{bad`), &result); err == nil {
+		t.Fatal("expected unmarshal error")
+	}
+}
+
+func TestHandleResponseErrorStatusJSON(t *testing.T) {
+	rc := &RestClient{}
+
+	body, _ := json.Marshal(ErrorResponse{Error: "Not Found", Message: "gone"})
+	resp := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Header:     make(http.Header),
+	}
+
+	err := rc.HandleResponse(resp, nil)
+	if err == nil {
+		t.Fatal("expected API error")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("unexpected status: %d", apiErr.StatusCode)
+	}
+}
+
+func TestHandleResponseErrorStatusNonJSON(t *testing.T) {
+	rc := &RestClient{}
+
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader("plain error text")),
+		Header:     make(http.Header),
+	}
+
+	err := rc.HandleResponse(resp, nil)
+	if err == nil {
+		t.Fatal("expected API error")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Response.Error != "Unknown error" {
+		t.Fatalf("expected Unknown error, got %s", apiErr.Response.Error)
+	}
+}
+
+func TestHandleResponseReadError(t *testing.T) {
+	rc := &RestClient{}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       errReader{},
+		Header:     make(http.Header),
+	}
+
+	if err := rc.HandleResponse(resp, nil); err == nil {
+		t.Fatal("expected read error")
+	}
+}
+
+// test helpers
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func okResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("read error") }
+func (errReader) Close() error             { return nil }

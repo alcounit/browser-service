@@ -1,4 +1,4 @@
-package service
+package browserconfig
 
 import (
 	"encoding/json"
@@ -6,34 +6,33 @@ import (
 	"net/http"
 
 	apierr "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	browserv1 "github.com/alcounit/browser-controller/apis/browser/v1"
+	browserconfigv1 "github.com/alcounit/browser-controller/apis/browserconfig/v1"
+	"github.com/alcounit/browser-controller/pkg/clientset"
+	browserconfiglisters "github.com/alcounit/browser-controller/pkg/listers/browserconfig/v1"
+	logctx "github.com/alcounit/browser-controller/pkg/log"
 	"github.com/alcounit/browser-service/pkg/broadcast"
 	"github.com/alcounit/browser-service/pkg/event"
-
-	"github.com/alcounit/browser-controller/pkg/clientset"
-	listers "github.com/alcounit/browser-controller/pkg/listers/browser/v1"
-	logctx "github.com/alcounit/browser-controller/pkg/log"
 	"github.com/go-chi/chi/v5"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type BrowserService struct {
+type Service struct {
 	client      clientset.Interface
-	lister      listers.BrowserLister
-	broadcaster broadcast.Broadcaster[event.BrowserEvent]
+	lister      browserconfiglisters.BrowserConfigLister
+	broadcaster broadcast.Broadcaster[event.BrowserConfigEvent]
 }
 
-func NewBrowserService(client clientset.Interface, lister listers.BrowserLister, eventBroadcaster broadcast.Broadcaster[event.BrowserEvent]) *BrowserService {
-	return &BrowserService{
+func NewService(client clientset.Interface, lister browserconfiglisters.BrowserConfigLister, eventBroadcaster broadcast.Broadcaster[event.BrowserConfigEvent]) *Service {
+	return &Service{
 		client:      client,
 		lister:      lister,
 		broadcaster: eventBroadcaster,
 	}
 }
 
-func (s *BrowserService) CreateBrowser(rw http.ResponseWriter, req *http.Request) {
+func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 	log := logctx.FromContext(req.Context())
 
 	namespace := chi.URLParam(req, "namespace")
@@ -44,40 +43,40 @@ func (s *BrowserService) CreateBrowser(rw http.ResponseWriter, req *http.Request
 	}
 
 	log = log.With().Str("namespace", namespace).Logger()
+
 	if req.Body == nil {
 		log.Error().Msg("empty request body")
 		writeErrorResponse(rw, http.StatusBadRequest, "request body must not be empty", nil)
 		return
 	}
 
-	var browser browserv1.Browser
-	if err := json.NewDecoder(req.Body).Decode(&browser); err != nil {
+	var cfg browserconfigv1.BrowserConfig
+	if err := json.NewDecoder(req.Body).Decode(&cfg); err != nil {
 		log.Err(err).Msg("failed to decode request body")
 		writeErrorResponse(rw, http.StatusBadRequest, "invalid request body", err)
 		return
 	}
 
-	if browser.Spec.BrowserName == "" || browser.Spec.BrowserVersion == "" {
-		log.Error().Msg("failed to create browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "required field is empty", nil)
+	if len(cfg.Spec.Browsers) == 0 {
+		log.Error().Msg("failed to create browser config")
+		writeErrorResponse(rw, http.StatusBadRequest, "required field is empty", nil)
 		return
 	}
 
-	result, err := s.client.BrowserV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
+	result, err := s.client.BrowserconfigV1().BrowserConfigs(namespace).Create(req.Context(), &cfg, metav1.CreateOptions{})
 	if err != nil {
-		log.Err(err).Msg("failed to create browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to create browser", err)
+		log.Err(err).Msg("failed to create browser config")
+		writeErrorResponse(rw, http.StatusInternalServerError, "failed to create browser config", err)
 		return
 	}
 
-	log.Info().Str("browserName", result.Name).Msg("browser created successfully")
+	log.Info().Str("browserConfigName", result.Name).Msg("browser config created successfully")
 
 	rw.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(rw).Encode(result)
-
 }
 
-func (s *BrowserService) GetBrowser(rw http.ResponseWriter, req *http.Request) {
+func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 	log := logctx.FromContext(req.Context())
 
 	namespace, name := chi.URLParam(req, "namespace"), chi.URLParam(req, "name")
@@ -87,27 +86,28 @@ func (s *BrowserService) GetBrowser(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log = log.With().Str("namespace", namespace).Str("browserName", name).Logger()
-	result, err := s.lister.Browsers(namespace).Get(name)
+	log = log.With().Str("namespace", namespace).Str("browserConfigName", name).Logger()
+
+	result, err := s.lister.BrowserConfigs(namespace).Get(name)
 	if err != nil {
 		if apierr.IsNotFound(err) {
-			log.Warn().Msg("browser not found")
+			log.Warn().Msg("browser config not found")
 			rw.WriteHeader(http.StatusNoContent)
 			return
 		}
 
-		log.Err(err).Msg("failed to get browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to retrieve browser", err)
+		log.Err(err).Msg("failed to get browser config")
+		writeErrorResponse(rw, http.StatusInternalServerError, "failed to retrieve browser config", err)
 		return
 	}
 
-	log.Info().Str("phase", string(result.Status.Phase)).Msg("browser retrieved successfully")
+	log.Info().Msg("browser config retrieved successfully")
 
 	rw.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(rw).Encode(result)
 }
 
-func (s *BrowserService) DeleteBrowser(rw http.ResponseWriter, req *http.Request) {
+func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
 	log := logctx.FromContext(req.Context())
 
 	namespace, name := chi.URLParam(req, "namespace"), chi.URLParam(req, "name")
@@ -119,24 +119,23 @@ func (s *BrowserService) DeleteBrowser(rw http.ResponseWriter, req *http.Request
 
 	log = log.With().Str("namespace", namespace).Str("name", name).Logger()
 
-	if err := s.client.BrowserV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
+	if err := s.client.BrowserconfigV1().BrowserConfigs(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
 		if apierr.IsNotFound(err) {
 			rw.WriteHeader(http.StatusNoContent)
-			log.Warn().Msg("browser not found, nothing to delete")
+			log.Warn().Msg("browser config not found, nothing to delete")
 			return
 		}
 
-		log.Err(err).Msg("failed to delete browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to delete browser", err)
+		log.Err(err).Msg("failed to delete browser config")
+		writeErrorResponse(rw, http.StatusInternalServerError, "failed to delete browser config", err)
 		return
 	}
 
-	log.Info().Msg("browser deleted successfully")
-
+	log.Info().Msg("browser config deleted successfully")
 	rw.WriteHeader(http.StatusNoContent)
 }
 
-func (s *BrowserService) ListBrowsers(rw http.ResponseWriter, req *http.Request) {
+func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	log := logctx.FromContext(req.Context())
 
 	namespace := chi.URLParam(req, "namespace")
@@ -147,28 +146,28 @@ func (s *BrowserService) ListBrowsers(rw http.ResponseWriter, req *http.Request)
 	}
 
 	log = log.With().Str("namespace", namespace).Logger()
-	browsers, err := s.lister.Browsers(namespace).List(labels.Everything())
 
+	configs, err := s.lister.BrowserConfigs(namespace).List(labels.Everything())
 	if err != nil {
 		if apierr.IsNotFound(err) {
-			log.Warn().Msg("no browsers found in namespace")
+			log.Warn().Msg("no browser configs found in namespace")
 			rw.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(rw).Encode([]*browserv1.Browser{})
+			json.NewEncoder(rw).Encode([]*browserconfigv1.BrowserConfig{})
 			return
 		}
 
-		log.Err(err).Msg("failed to list browsers")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to list browsers", err)
+		log.Err(err).Msg("failed to list browser configs")
+		writeErrorResponse(rw, http.StatusInternalServerError, "failed to list browser configs", err)
 		return
 	}
 
-	log.Info().Int("count", len(browsers)).Msg("browsers listed successfully")
+	log.Info().Int("count", len(configs)).Msg("browser configs listed successfully")
 
 	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(browsers)
+	json.NewEncoder(rw).Encode(configs)
 }
 
-func (s *BrowserService) BrowserEvents(rw http.ResponseWriter, req *http.Request) {
+func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 	log := logctx.FromContext(req.Context())
 
 	namespace := chi.URLParam(req, "namespace")
@@ -197,34 +196,35 @@ func (s *BrowserService) BrowserEvents(rw http.ResponseWriter, req *http.Request
 	rw.Header().Set("Connection", "keep-alive")
 	rw.Header().Set("X-Accel-Buffering", "no")
 
-	ch := s.broadcaster.Subscribe()
+	var predicate func(event.BrowserConfigEvent) bool
+	if nameFilter != "" {
+		predicate = func(evt event.BrowserConfigEvent) bool {
+			return evt.BrowserConfig != nil && evt.BrowserConfig.GetName() == nameFilter
+		}
+	}
+
+	ch := s.broadcaster.Subscribe(predicate)
 	defer s.broadcaster.Unsubscribe(ch)
 
 	for {
 		select {
 		case <-req.Context().Done():
-			log.Info().Msg("browser events stream closed by client")
+			log.Info().Msg("browser config events stream closed by client")
 			return
-		case event, ok := <-ch:
+		case evt, ok := <-ch:
 			if !ok {
-				log.Info().Msg("browser events channel closed")
+				log.Info().Msg("browser config events channel closed")
 				flusher.Flush()
 				return
 			}
 
-			if event.Browser == nil {
+			if evt.BrowserConfig == nil {
 				continue
 			}
 
-			if nameFilter != "" {
-				if event.Browser.GetName() != nameFilter {
-					continue
-				}
-			}
-
-			data, err := json.Marshal(event)
+			data, err := json.Marshal(evt)
 			if err != nil {
-				log.Err(err).Msg("failed to encode browser event")
+				log.Err(err).Msg("failed to encode browser config event")
 				return
 			}
 			fmt.Fprintf(rw, "data: %s\n\n", data)
