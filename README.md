@@ -47,26 +47,47 @@ The service assumes that:
 All APIs are namespaced.
 
 
-### Endpoints
+### Browser endpoints
 
-- `POST   /api/v1/namespaces/{namespace}/browsers`  
+- `POST   /api/v1/namespaces/{namespace}/browsers`
   Create a new `Browser`
 
-- `GET    /api/v1/namespaces/{namespace}/browsers/{name}`  
+- `GET    /api/v1/namespaces/{namespace}/browsers/{name}`
   Get a single `Browser`
 
-- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}`  
+- `DELETE /api/v1/namespaces/{namespace}/browsers/{name}`
   Delete a `Browser`
 
-- `GET    /api/v1/namespaces/{namespace}/browsers`  
+- `GET    /api/v1/namespaces/{namespace}/browsers`
   List all Browsers in a namespace
 
-- `GET    /api/v1/namespaces/{namespace}/events`  
-  Stream browser events (server-sent events over HTTP)
+- `GET    /api/v1/namespaces/{namespace}/browsers/events`
+  Stream browser lifecycle events (server-sent events over HTTP)
 
   Query parameters (optional):
-  - `name` — filter events by browser name.  
+  - `name` — filter events by browser name.
     When specified, only events related to the given browser are streamed.
+
+### BrowserConfig endpoints
+
+- `POST   /api/v1/namespaces/{namespace}/browserconfigs`
+  Create a new `BrowserConfig`
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs/{name}`
+  Get a single `BrowserConfig`
+
+- `DELETE /api/v1/namespaces/{namespace}/browserconfigs/{name}`
+  Delete a `BrowserConfig`
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs`
+  List all BrowserConfigs in a namespace
+
+- `GET    /api/v1/namespaces/{namespace}/browserconfigs/events`
+  Stream BrowserConfig lifecycle events (server-sent events over HTTP)
+
+  Query parameters (optional):
+  - `name` — filter events by BrowserConfig name.
+    When specified, only events related to the given browserconfig are streamed.
 
 ---
 
@@ -123,8 +144,4 @@ REGISTRY, VERSION is expected to be provided externally, which allows the same M
 
 ## Deployment
 
-<<<<<<< HEAD
 Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
-=======
-Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
->>>>>>> origin
