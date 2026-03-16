@@ -199,6 +199,7 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 	rw.Header().Set("Cache-Control", "no-cache")
 	rw.Header().Set("Connection", "keep-alive")
 	rw.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
 
 	var predicate func(event.BrowserConfigEvent) bool
 	if nameFilter != "" {
