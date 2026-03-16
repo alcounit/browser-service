@@ -1,3 +1,5 @@
+[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-service)](https://github.com/alcounit/browser-service/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-service.svg)](https://hub.docker.com/r/alcounit/browser-service)
+
 # Browser Service
 
 Browser Service is an HTTP API and event streaming layer for the **Selenosis** ecosystem.  
@@ -121,4 +123,8 @@ REGISTRY, VERSION is expected to be provided externally, which allows the same M
 
 ## Deployment
 
+<<<<<<< HEAD
 Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
+=======
+Helm chart [selenosis-deploy](https://github.com/alcounit/selenosis-deploy)
+>>>>>>> origin
