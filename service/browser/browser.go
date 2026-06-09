@@ -1,9 +1,10 @@
 package browser
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 
 	apierr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,11 @@ import (
 	"github.com/alcounit/browser-service/pkg/broadcast"
 	"github.com/alcounit/browser-service/pkg/event"
 	"github.com/go-chi/chi/v5"
+)
+
+var (
+	sseDataPrefix = []byte("data: ")
+	sseDataSuffix = []byte("\n\n")
 )
 
 type Service struct {
@@ -38,41 +44,39 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 	namespace := chi.URLParam(req, "namespace")
 	if namespace == "" {
 		log.Error().Msg("missing required url param: namespace")
-		writeErrorResponse(rw, http.StatusBadRequest, "namespace must be provided", nil)
+		writeJSONError(rw, http.StatusBadRequest, "namespace must be provided", nil)
 		return
 	}
 
 	log = log.With().Str("namespace", namespace).Logger()
 	if req.Body == nil {
 		log.Error().Msg("empty request body")
-		writeErrorResponse(rw, http.StatusBadRequest, "request body must not be empty", nil)
+		writeJSONError(rw, http.StatusBadRequest, "request body must not be empty", nil)
 		return
 	}
 
 	var browser browserv1.Browser
 	if err := json.NewDecoder(req.Body).Decode(&browser); err != nil {
 		log.Err(err).Msg("failed to decode request body")
-		writeErrorResponse(rw, http.StatusBadRequest, "invalid request body", err)
+		writeJSONError(rw, http.StatusBadRequest, "invalid request body", err)
 		return
 	}
 
 	if browser.Spec.BrowserName == "" || browser.Spec.BrowserVersion == "" {
 		log.Error().Msg("failed to create browser")
-		writeErrorResponse(rw, http.StatusBadRequest, "required field is empty", nil)
+		writeJSONError(rw, http.StatusBadRequest, "required field is empty", nil)
 		return
 	}
 
 	result, err := s.client.BrowserV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
 	if err != nil {
 		log.Err(err).Msg("failed to create browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to create browser", err)
+		writeJSONError(rw, http.StatusInternalServerError, "failed to create browser", err)
 		return
 	}
 
 	log.Info().Str("browserName", result.Name).Msg("browser created successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(result)
+	writeJSON(rw, result)
 }
 
 func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
@@ -81,7 +85,7 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 	namespace, name := chi.URLParam(req, "namespace"), chi.URLParam(req, "name")
 	if namespace == "" || name == "" {
 		log.Error().Msg("missing required url params: namespace or name")
-		writeErrorResponse(rw, http.StatusBadRequest, "namespace and name must be provided", nil)
+		writeJSONError(rw, http.StatusBadRequest, "namespace and name must be provided", nil)
 		return
 	}
 
@@ -95,14 +99,12 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 		}
 
 		log.Err(err).Msg("failed to get browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to retrieve browser", err)
+		writeJSONError(rw, http.StatusInternalServerError, "failed to retrieve browser", err)
 		return
 	}
 
 	log.Info().Str("phase", string(result.Status.Phase)).Msg("browser retrieved successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(result)
+	writeJSON(rw, result)
 }
 
 func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
@@ -111,7 +113,7 @@ func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
 	namespace, name := chi.URLParam(req, "namespace"), chi.URLParam(req, "name")
 	if namespace == "" || name == "" {
 		log.Error().Msg("missing required url params: namespace or name")
-		writeErrorResponse(rw, http.StatusBadRequest, "namespace and name must be provided", nil)
+		writeJSONError(rw, http.StatusBadRequest, "namespace and name must be provided", nil)
 		return
 	}
 
@@ -125,7 +127,7 @@ func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
 		}
 
 		log.Err(err).Msg("failed to delete browser")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to delete browser", err)
+		writeJSONError(rw, http.StatusInternalServerError, "failed to delete browser", err)
 		return
 	}
 
@@ -139,7 +141,7 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	namespace := chi.URLParam(req, "namespace")
 	if namespace == "" {
 		log.Error().Msg("missing required url param: namespace")
-		writeErrorResponse(rw, http.StatusBadRequest, "namespace must be provided", nil)
+		writeJSONError(rw, http.StatusBadRequest, "namespace must be provided", nil)
 		return
 	}
 
@@ -148,13 +150,12 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		if apierr.IsNotFound(err) {
 			log.Warn().Msg("no browsers found in namespace")
-			rw.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(rw).Encode([]*browserv1.Browser{})
+			writeJSON(rw, []*browserv1.Browser{})
 			return
 		}
 
 		log.Err(err).Msg("failed to list browsers")
-		writeErrorResponse(rw, http.StatusInternalServerError, "failed to list browsers", err)
+		writeJSONError(rw, http.StatusInternalServerError, "failed to list browsers", err)
 		return
 	}
 
@@ -163,9 +164,7 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	log.Info().Int("count", len(browsers)).Msg("browsers listed successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(browsers)
+	writeJSON(rw, browsers)
 }
 
 func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
@@ -174,7 +173,7 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 	namespace := chi.URLParam(req, "namespace")
 	if namespace == "" {
 		log.Error().Msg("missing required url param: namespace")
-		writeErrorResponse(rw, http.StatusBadRequest, "namespace must be provided", nil)
+		writeJSONError(rw, http.StatusBadRequest, "namespace must be provided", nil)
 		return
 	}
 
@@ -188,7 +187,7 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 	flusher, ok := rw.(http.Flusher)
 	if !ok {
 		log.Error().Msg("response writer does not support http.Flusher")
-		writeErrorResponse(rw, http.StatusInternalServerError, "streaming not supported", nil)
+		writeJSONError(rw, http.StatusInternalServerError, "streaming not supported", nil)
 		return
 	}
 
@@ -229,23 +228,45 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 				log.Err(err).Msg("failed to encode browser event")
 				return
 			}
-			fmt.Fprintf(rw, "data: %s\n\n", data)
+			rw.Write(sseDataPrefix)
+			rw.Write(data)
+			rw.Write(sseDataSuffix)
 			flusher.Flush()
 		}
 	}
 }
 
-func writeErrorResponse(rw http.ResponseWriter, status int, msg string, err error) {
+type errorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+	Details string `json:"details"`
+}
+
+func writeJSON(rw http.ResponseWriter, v any) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		writeJSONError(rw, http.StatusInternalServerError, "failed to encode response", err)
+		return err
+	}
 	rw.Header().Set("Content-Type", "application/json")
-	rw.WriteHeader(status)
-	json.NewEncoder(rw).Encode(map[string]string{
-		"error":   http.StatusText(status),
-		"message": msg,
-		"details": func() string {
-			if err != nil {
-				return err.Error()
-			}
-			return ""
-		}(),
+	rw.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	buf.WriteTo(rw)
+	return nil
+}
+
+func writeJSONError(rw http.ResponseWriter, status int, msg string, err error) {
+	details := ""
+	if err != nil {
+		details = err.Error()
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(errorResponse{
+		Error:   http.StatusText(status),
+		Message: msg,
+		Details: details,
 	})
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	rw.WriteHeader(status)
+	buf.WriteTo(rw)
 }
