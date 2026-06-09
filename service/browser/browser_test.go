@@ -436,9 +436,44 @@ func TestEventsChannelClosed(t *testing.T) {
 	}
 }
 
+func TestEventsNilBrowserSkipped(t *testing.T) {
+	b := broadcast.NewBroadcaster[event.BrowserEvent](2)
+	svc := NewService(nil, nil, b)
+
+	req := newRequestWithParams(http.MethodGet, "/", nil, map[string]string{"namespace": "default"})
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	rw := &recordingRW{header: make(http.Header)}
+	done := make(chan struct{})
+
+	go func() {
+		svc.Events(rw, req)
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	b.Broadcast(event.BrowserEvent{EventType: event.EventTypeAdded, Browser: nil})
+
+	if waitFor(func() bool { return rw.Len() > 0 }, 150*time.Millisecond) {
+		cancel()
+		t.Fatal("expected nil browser event to be skipped")
+	}
+
+	b.Broadcast(event.BrowserEvent{EventType: event.EventTypeAdded, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "br"}}})
+
+	if !waitFor(func() bool { return rw.Len() > 0 }, 2*time.Second) {
+		cancel()
+		t.Fatal("timed out waiting for valid event")
+	}
+
+	cancel()
+	<-done
+}
+
 func TestWriteErrorResponse(t *testing.T) {
 	rw := httptest.NewRecorder()
-	writeErrorResponse(rw, http.StatusBadRequest, "bad", errors.New("details"))
+	writeJSONError(rw, http.StatusBadRequest, "bad", errors.New("details"))
 
 	if rw.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", rw.Code)

@@ -24,13 +24,14 @@ func (s subscription[T]) matches(event T) bool {
 
 type broadcaster[T any] struct {
 	mu      sync.RWMutex
-	clients map[chan T]subscription[T]
+	subs    []subscription[T]
+	idx     map[chan T]int
 	bufSize int
 }
 
 func NewBroadcaster[T any](bufSize int) Broadcaster[T] {
 	return &broadcaster[T]{
-		clients: make(map[chan T]subscription[T]),
+		idx:     make(map[chan T]int),
 		bufSize: bufSize,
 	}
 }
@@ -44,37 +45,55 @@ func (b *broadcaster[T]) Subscribe(predicates ...func(T) bool) chan T {
 		}
 	}
 	b.mu.Lock()
-	b.clients[ch] = subscription[T]{ch: ch, predicates: active}
+	b.idx[ch] = len(b.subs)
+	b.subs = append(b.subs, subscription[T]{ch: ch, predicates: active})
 	b.mu.Unlock()
 	return ch
 }
 
+func (b *broadcaster[T]) remove(ch chan T) {
+	i, ok := b.idx[ch]
+	if !ok {
+		return
+	}
+	last := len(b.subs) - 1
+	if i != last {
+		b.subs[i] = b.subs[last]
+		b.idx[b.subs[i].ch] = i
+	}
+	b.subs[last] = subscription[T]{}
+	b.subs = b.subs[:last]
+	delete(b.idx, ch)
+	close(ch)
+}
+
 func (b *broadcaster[T]) Unsubscribe(ch chan T) {
 	b.mu.Lock()
-	_, ok := b.clients[ch]
-	if ok {
-		delete(b.clients, ch)
-		close(ch)
-	}
+	b.remove(ch)
 	b.mu.Unlock()
 }
 
 func (b *broadcaster[T]) Broadcast(event T) {
 	b.mu.RLock()
 	var slow []chan T
-	for ch, sub := range b.clients {
+	for _, sub := range b.subs {
 		if !sub.matches(event) {
 			continue
 		}
 		select {
-		case ch <- event:
+		case sub.ch <- event:
 		default:
-			slow = append(slow, ch)
+			slow = append(slow, sub.ch)
 		}
 	}
 	b.mu.RUnlock()
 
-	for _, ch := range slow {
-		b.Unsubscribe(ch)
+	if len(slow) == 0 {
+		return
 	}
+	b.mu.Lock()
+	for _, ch := range slow {
+		b.remove(ch)
+	}
+	b.mu.Unlock()
 }

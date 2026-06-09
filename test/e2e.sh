@@ -2,7 +2,8 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
-NAMESPACE="${NAMESPACE:-default}"
+NAMESPACE="${NAMESPACE:-e2e-$(date +%s)}"
+NAMESPACE_CREATED=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="${SCRIPT_DIR}/fixtures"
 
@@ -13,6 +14,23 @@ NC='\033[0m'
 
 PASS=0
 FAIL=0
+
+cleanup() {
+  if [ -n "$NAMESPACE_CREATED" ]; then
+    echo -e "\n${YELLOW}▶ Cleanup${NC}"
+    kubectl delete namespace "$NAMESPACE" --wait=false 2>/dev/null || true
+    echo "  namespace ${NAMESPACE} scheduled for deletion"
+  fi
+}
+trap cleanup EXIT
+
+if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+  kubectl create namespace "$NAMESPACE"
+  NAMESPACE_CREATED="true"
+  echo "namespace ${NAMESPACE} created"
+else
+  echo "namespace ${NAMESPACE} already exists"
+fi
 
 pass() { echo -e "  ${GREEN}PASS${NC}  $1"; PASS=$((PASS + 1)); }
 fail() { echo -e "  ${RED}FAIL${NC}  $1"; FAIL=$((FAIL + 1)); }

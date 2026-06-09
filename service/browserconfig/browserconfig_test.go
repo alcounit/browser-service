@@ -388,6 +388,147 @@ func TestEventsChannelClosed(t *testing.T) {
 	}
 }
 
+func TestEventsNameFilter(t *testing.T) {
+	b := broadcast.NewBroadcaster[event.BrowserConfigEvent](2)
+	svc := NewService(nil, nil, b)
+
+	req := newRequestWithParams(http.MethodGet, "/?name=target", nil, map[string]string{"namespace": "default"})
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	rw := &recordingRW{header: make(http.Header)}
+	done := make(chan struct{})
+
+	go func() {
+		svc.Events(rw, req)
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	b.Broadcast(event.BrowserConfigEvent{EventType: event.EventTypeAdded, BrowserConfig: &browserconfigv1.BrowserConfig{ObjectMeta: metav1.ObjectMeta{Name: "other"}}})
+
+	if waitFor(func() bool { return rw.Len() > 0 }, 150*time.Millisecond) {
+		cancel()
+		t.Fatal("unexpected event write for non-matching name")
+	}
+
+	b.Broadcast(event.BrowserConfigEvent{EventType: event.EventTypeAdded, BrowserConfig: &browserconfigv1.BrowserConfig{ObjectMeta: metav1.ObjectMeta{Name: "target"}}})
+
+	if !waitFor(func() bool { return rw.Len() > 0 }, 2*time.Second) {
+		cancel()
+		t.Fatal("timed out waiting for matching event")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler to exit")
+	}
+}
+
+func TestWriteErrorResponse(t *testing.T) {
+	rw := httptest.NewRecorder()
+	writeErrorResponse(rw, http.StatusBadRequest, "bad request", errors.New("detail"))
+
+	if rw.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rw.Code)
+	}
+	if ct := rw.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected Content-Type application/json, got %q", ct)
+	}
+	if cl := rw.Header().Get("Content-Length"); cl == "" {
+		t.Fatal("expected Content-Length to be set")
+	}
+
+	var got map[string]string
+	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if got["message"] != "bad request" {
+		t.Fatalf("unexpected message: %q", got["message"])
+	}
+	if got["details"] != "detail" {
+		t.Fatalf("unexpected details: %q", got["details"])
+	}
+}
+
+func TestWriteErrorResponseNoError(t *testing.T) {
+	rw := httptest.NewRecorder()
+	writeErrorResponse(rw, http.StatusInternalServerError, "internal", nil)
+
+	if rw.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", rw.Code)
+	}
+
+	var got map[string]string
+	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if got["details"] != "" {
+		t.Fatalf("expected empty details, got %q", got["details"])
+	}
+}
+
+func TestWriteJSONSetsContentLength(t *testing.T) {
+	cfg := &browserconfigv1.BrowserConfig{ObjectMeta: metav1.ObjectMeta{Name: "cfg"}}
+	rw := httptest.NewRecorder()
+
+	if err := writeJSON(rw, cfg); err != nil {
+		t.Fatalf("writeJSON returned error: %v", err)
+	}
+	if rw.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rw.Code)
+	}
+	if cl := rw.Header().Get("Content-Length"); cl == "" {
+		t.Fatal("expected Content-Length to be set")
+	}
+
+	var got browserconfigv1.BrowserConfig
+	if err := json.NewDecoder(rw.Body).Decode(&got); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got.Name != "cfg" {
+		t.Fatalf("unexpected name: %q", got.Name)
+	}
+}
+
+func TestEventsNilBrowserConfigSkipped(t *testing.T) {
+	b := broadcast.NewBroadcaster[event.BrowserConfigEvent](2)
+	svc := NewService(nil, nil, b)
+
+	req := newRequestWithParams(http.MethodGet, "/", nil, map[string]string{"namespace": "default"})
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	rw := &recordingRW{header: make(http.Header)}
+	done := make(chan struct{})
+
+	go func() {
+		svc.Events(rw, req)
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	b.Broadcast(event.BrowserConfigEvent{EventType: event.EventTypeAdded, BrowserConfig: nil})
+
+	if waitFor(func() bool { return rw.Len() > 0 }, 150*time.Millisecond) {
+		cancel()
+		t.Fatal("expected nil browserconfig event to be skipped")
+	}
+
+	b.Broadcast(event.BrowserConfigEvent{EventType: event.EventTypeAdded, BrowserConfig: &browserconfigv1.BrowserConfig{ObjectMeta: metav1.ObjectMeta{Name: "cfg"}}})
+
+	if !waitFor(func() bool { return rw.Len() > 0 }, 2*time.Second) {
+		cancel()
+		t.Fatal("timed out waiting for valid event")
+	}
+
+	cancel()
+	<-done
+}
+
 // fakes
 
 type fakeLister struct {

@@ -1,9 +1,10 @@
 package browserconfig
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 
 	apierr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,11 @@ import (
 	"github.com/alcounit/browser-service/pkg/broadcast"
 	"github.com/alcounit/browser-service/pkg/event"
 	"github.com/go-chi/chi/v5"
+)
+
+var (
+	sseDataPrefix = []byte("data: ")
+	sseDataSuffix = []byte("\n\n")
 )
 
 type Service struct {
@@ -71,9 +77,7 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	log.Info().Str("browserConfigName", result.Name).Msg("browser config created successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(result)
+	writeJSON(rw, result)
 }
 
 func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
@@ -102,9 +106,7 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	log.Info().Msg("browser config retrieved successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(result)
+	writeJSON(rw, result)
 }
 
 func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
@@ -151,8 +153,7 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		if apierr.IsNotFound(err) {
 			log.Warn().Msg("no browser configs found in namespace")
-			rw.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(rw).Encode([]*browserconfigv1.BrowserConfig{})
+			writeJSON(rw, []*browserconfigv1.BrowserConfig{})
 			return
 		}
 
@@ -166,9 +167,7 @@ func (s *Service) List(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	log.Info().Int("count", len(configs)).Msg("browser configs listed successfully")
-
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(configs)
+	writeJSON(rw, configs)
 }
 
 func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
@@ -232,23 +231,45 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 				log.Err(err).Msg("failed to encode browser config event")
 				return
 			}
-			fmt.Fprintf(rw, "data: %s\n\n", data)
+			rw.Write(sseDataPrefix)
+			rw.Write(data)
+			rw.Write(sseDataSuffix)
 			flusher.Flush()
 		}
 	}
 }
 
-func writeErrorResponse(rw http.ResponseWriter, status int, msg string, err error) {
+type errorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+	Details string `json:"details"`
+}
+
+func writeJSON(rw http.ResponseWriter, v any) error {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		writeErrorResponse(rw, http.StatusInternalServerError, "failed to encode response", err)
+		return err
+	}
 	rw.Header().Set("Content-Type", "application/json")
-	rw.WriteHeader(status)
-	json.NewEncoder(rw).Encode(map[string]string{
-		"error":   http.StatusText(status),
-		"message": msg,
-		"details": func() string {
-			if err != nil {
-				return err.Error()
-			}
-			return ""
-		}(),
+	rw.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	buf.WriteTo(rw)
+	return nil
+}
+
+func writeErrorResponse(rw http.ResponseWriter, status int, msg string, err error) {
+	details := ""
+	if err != nil {
+		details = err.Error()
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(errorResponse{
+		Error:   http.StatusText(status),
+		Message: msg,
+		Details: details,
 	})
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	rw.WriteHeader(status)
+	buf.WriteTo(rw)
 }

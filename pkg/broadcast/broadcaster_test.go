@@ -71,7 +71,6 @@ func TestConcurrentBroadcastUnsubscribeNoPanic(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			ch := b.Subscribe()
-			// drain so we don't become slow subscriber
 			go func() {
 				for range ch {
 				}
@@ -128,4 +127,129 @@ func TestUnsubscribeUnknownChannelNoPanic(t *testing.T) {
 	}()
 
 	ch <- 1
+}
+
+func TestUnsubscribeMiddleElementSwapsWithLast(t *testing.T) {
+	b := NewBroadcaster[int](1)
+	ch1 := b.Subscribe()
+	ch2 := b.Subscribe()
+	ch3 := b.Subscribe()
+
+	b.Unsubscribe(ch2)
+
+	b.Broadcast(99)
+
+	got1, ok1 := <-ch1
+	got3, ok3 := <-ch3
+
+	if !ok1 || got1 != 99 {
+		t.Fatalf("ch1: expected (99, true), got (%d, %v)", got1, ok1)
+	}
+	if !ok3 || got3 != 99 {
+		t.Fatalf("ch3: expected (99, true), got (%d, %v)", got3, ok3)
+	}
+
+	select {
+	case _, ok := <-ch2:
+		if ok {
+			t.Fatal("ch2 should be closed after unsubscribe")
+		}
+	default:
+		t.Fatal("ch2 should be closed (readable) after unsubscribe")
+	}
+
+	b.Unsubscribe(ch1)
+	b.Unsubscribe(ch3)
+}
+
+func TestUnsubscribeLastElement(t *testing.T) {
+	b := NewBroadcaster[int](1)
+	ch1 := b.Subscribe()
+	ch2 := b.Subscribe()
+
+	b.Unsubscribe(ch2)
+
+	b.Broadcast(7)
+
+	got, ok := <-ch1
+	if !ok || got != 7 {
+		t.Fatalf("ch1: expected (7, true), got (%d, %v)", got, ok)
+	}
+
+	b.Unsubscribe(ch1)
+}
+
+func TestUnsubscribeFirstElement(t *testing.T) {
+	b := NewBroadcaster[int](1)
+	ch1 := b.Subscribe()
+	ch2 := b.Subscribe()
+	ch3 := b.Subscribe()
+
+	b.Unsubscribe(ch1)
+
+	b.Broadcast(5)
+
+	got2, ok2 := <-ch2
+	got3, ok3 := <-ch3
+
+	if !ok2 || got2 != 5 {
+		t.Fatalf("ch2: expected (5, true), got (%d, %v)", got2, ok2)
+	}
+	if !ok3 || got3 != 5 {
+		t.Fatalf("ch3: expected (5, true), got (%d, %v)", got3, ok3)
+	}
+
+	b.Unsubscribe(ch2)
+	b.Unsubscribe(ch3)
+}
+
+func TestBroadcastMultipleSlowSubscribersRemovedInOneLock(t *testing.T) {
+	b := NewBroadcaster[int](1)
+
+	ch1 := b.Subscribe()
+	ch2 := b.Subscribe()
+	ch3 := b.Subscribe()
+
+	b.Broadcast(1)
+
+	normalCh := b.Subscribe()
+
+	b.Broadcast(2)
+
+	got, ok := <-normalCh
+	if !ok || got != 2 {
+		t.Fatalf("normal subscriber: expected (2, true), got (%d, %v)", got, ok)
+	}
+
+	for i, ch := range []chan int{ch1, ch2, ch3} {
+		for range ch {
+		}
+		if _, stillOpen := <-ch; stillOpen {
+			t.Fatalf("slow[%d] should be closed after being evicted", i)
+		}
+	}
+
+	b.Unsubscribe(normalCh)
+}
+
+func TestBroadcastNoSubscribers(t *testing.T) {
+	b := NewBroadcaster[int](1)
+	b.Broadcast(1)
+}
+
+func TestSubscribeNilPredicateIgnored(t *testing.T) {
+	b := NewBroadcaster[int](2)
+	ch := b.Subscribe(nil, func(v int) bool { return v > 0 }, nil)
+
+	b.Broadcast(-1)
+	b.Broadcast(1)
+	b.Unsubscribe(ch)
+
+	var got []int
+	for v := range ch {
+		got = append(got, v)
+	}
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("expected [1], got %v", got)
+	}
 }
