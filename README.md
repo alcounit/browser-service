@@ -1,4 +1,4 @@
-[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-service)](https://github.com/alcounit/browser-service/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-service.svg)](https://hub.docker.com/r/alcounit/browser-service)
+[![GitHub release](https://img.shields.io/github/v/release/alcounit/browser-service)](https://github.com/alcounit/browser-service/releases) [![Go Reference](https://pkg.go.dev/badge/github.com/alcounit/browser-service.svg)](https://pkg.go.dev/github.com/alcounit/browser-service) [![Docker Pulls](https://img.shields.io/docker/pulls/alcounit/browser-service.svg)](https://hub.docker.com/r/alcounit/browser-service) [![codecov](https://codecov.io/gh/alcounit/browser-service/branch/main/graph/badge.svg)](https://codecov.io/gh/alcounit/browser-service) [![Go Report Card](https://goreportcard.com/badge/github.com/alcounit/browser-service)](https://goreportcard.com/report/github.com/alcounit/browser-service)
 
 # Browser Service
 
