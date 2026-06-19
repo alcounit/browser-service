@@ -37,7 +37,7 @@ stream for the live session list.
 | **[selenosis](https://github.com/alcounit/selenosis)** | Stateless Selenium / Playwright / MCP hub. Calls this service to create sessions and watch readiness. |
 | **[seleniferous](https://github.com/alcounit/seleniferous)** | Sidecar proxy inside each browser pod. |
 | **[browser-controller](https://github.com/alcounit/browser-controller)** | Operator that reconciles `Browser` / `BrowserConfig` CRDs into pods. Owns the CRD types this service uses. |
-| **[browser-service](https://github.com/alcounit/browser-service)** (this repo) | REST + SSE facade over `Browser` resources. |
+| **[browser-service](https://github.com/alcounit/browser-service)** (this repo) | REST + SSE facade over `Browser` and `BrowserConfig` resources. |
 | **[browser-ui](https://github.com/alcounit/browser-ui)** | Dashboard; consumes this service's event stream + VNC. |
 | **[selenosis-deploy](https://github.com/alcounit/selenosis-deploy)** | Helm chart that deploys the whole stack. **Start here.** |
 
