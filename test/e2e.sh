@@ -322,6 +322,14 @@ check_array_length "response is empty array after delete" "." 0
 
 # ---------------------------------------------------------------------------
 
+section "Browser — get missing returns 404"
+
+status=$(do_request GET "/api/v1/namespaces/${NAMESPACE}/browsers/${BROWSER_NAME}")
+check "GET /browsers/${BROWSER_NAME} (missing)" 404 "$status"
+check_json_field "not-found body has error field" ".error" "Not Found"
+
+# ---------------------------------------------------------------------------
+
 section "BrowserConfig — delete"
 
 status=$(do_request DELETE "/api/v1/namespaces/${NAMESPACE}/browserconfigs/${CONFIG_NAME}")
@@ -334,6 +342,14 @@ section "BrowserConfig — list empty after delete"
 status=$(do_request GET "/api/v1/namespaces/${NAMESPACE}/browserconfigs")
 check "GET /browserconfigs (empty after delete)" 200 "$status"
 check_array_length "response is empty array after delete" "." 0
+
+# ---------------------------------------------------------------------------
+
+section "BrowserConfig — get missing returns 404"
+
+status=$(do_request GET "/api/v1/namespaces/${NAMESPACE}/browserconfigs/${CONFIG_NAME}")
+check "GET /browserconfigs/${CONFIG_NAME} (missing)" 404 "$status"
+check_json_field "not-found body has error field" ".error" "Not Found"
 
 # ---------------------------------------------------------------------------
 

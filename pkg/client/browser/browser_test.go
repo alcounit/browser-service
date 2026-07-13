@@ -254,6 +254,20 @@ func TestGetBrowserRequestError(t *testing.T) {
 	}
 }
 
+func TestGetBrowserNotFound(t *testing.T) {
+	c := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
+		return response(http.StatusNotFound, `{"error":"Not Found","message":"browser not found"}`), nil
+	})
+
+	result, err := c.Get(context.Background(), "default", "name")
+	if result != nil {
+		t.Fatalf("expected nil result, got %v", result)
+	}
+	if !client.IsNotFound(err) {
+		t.Fatalf("expected IsNotFound to be true, got %v", err)
+	}
+}
+
 func TestEventsSuccess(t *testing.T) {
 	events := []event.BrowserEvent{
 		{EventType: event.EventTypeAdded, Browser: &browserv1.Browser{ObjectMeta: metav1.ObjectMeta{Name: "one"}}},

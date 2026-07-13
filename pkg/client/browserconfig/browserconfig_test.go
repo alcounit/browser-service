@@ -126,6 +126,20 @@ func TestGetRequestError(t *testing.T) {
 	}
 }
 
+func TestGetNotFound(t *testing.T) {
+	c := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
+		return response(http.StatusNotFound, `{"error":"Not Found","message":"browser config not found"}`), nil
+	})
+
+	result, err := c.Get(context.Background(), "default", "cfg")
+	if result != nil {
+		t.Fatalf("expected nil result, got %v", result)
+	}
+	if !client.IsNotFound(err) {
+		t.Fatalf("expected IsNotFound to be true, got %v", err)
+	}
+}
+
 func TestDeleteSuccess(t *testing.T) {
 	c := newClientWithTransport(t, func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodDelete {

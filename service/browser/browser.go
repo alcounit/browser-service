@@ -94,7 +94,7 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		if apierr.IsNotFound(err) {
 			log.Warn().Msg("browser not found")
-			rw.WriteHeader(http.StatusNoContent)
+			writeJSONError(rw, http.StatusNotFound, "browser not found", err)
 			return
 		}
 

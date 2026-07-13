@@ -96,7 +96,7 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		if apierr.IsNotFound(err) {
 			log.Warn().Msg("browser config not found")
-			rw.WriteHeader(http.StatusNoContent)
+			writeErrorResponse(rw, http.StatusNotFound, "browser config not found", err)
 			return
 		}
 

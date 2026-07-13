@@ -155,8 +155,11 @@ func TestGetNotFound(t *testing.T) {
 
 	svc.Get(rw, req)
 
-	if rw.Code != http.StatusNoContent {
-		t.Fatalf("expected status 204, got %d", rw.Code)
+	if rw.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", rw.Code)
+	}
+	if ct := rw.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected application/json body, got %q", ct)
 	}
 }
 
