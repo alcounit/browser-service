@@ -17,6 +17,7 @@ import (
 	"github.com/alcounit/browser-service/pkg/broadcast"
 	"github.com/alcounit/browser-service/pkg/event"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 var (
@@ -62,11 +63,19 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	log = log.With().Dict("Browser", zerolog.Dict().
+		Str("hostname", browser.Name).
+		Str("type", browser.Spec.BrowserName).
+		Str("version", browser.Spec.BrowserVersion)).
+		Logger()
+
 	if browser.Spec.BrowserName == "" || browser.Spec.BrowserVersion == "" {
 		log.Error().Msg("failed to create browser")
 		writeJSONError(rw, http.StatusBadRequest, "required field is empty", nil)
 		return
 	}
+
+	setServiceLabel(req, &browser)
 
 	result, err := s.client.BrowserV1().Browsers(namespace).Create(req.Context(), &browser, metav1.CreateOptions{})
 	if err != nil {
@@ -75,7 +84,7 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Info().Str("browserName", result.Name).Msg("browser created successfully")
+	log.Info().Msg("browser created successfully")
 	writeJSON(rw, result)
 }
 
@@ -89,7 +98,12 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log = log.With().Str("namespace", namespace).Str("browserName", name).Logger()
+	log = log.With().
+		Str("namespace", namespace).
+		Dict("Browser", zerolog.Dict().
+			Str("hostname", name)).
+		Logger()
+
 	result, err := s.lister.Browsers(namespace).Get(name)
 	if err != nil {
 		if apierr.IsNotFound(err) {
@@ -103,7 +117,7 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Info().Str("phase", string(result.Status.Phase)).Msg("browser retrieved successfully")
+	log.Info().Msg("browser retrieved successfully")
 	writeJSON(rw, result)
 }
 
@@ -117,7 +131,11 @@ func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log = log.With().Str("namespace", namespace).Str("name", name).Logger()
+	log = log.With().
+		Str("namespace", namespace).
+		Dict("Browser", zerolog.Dict().
+			Str("hostname", name)).
+		Logger()
 
 	if err := s.client.BrowserV1().Browsers(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
 		if apierr.IsNotFound(err) {
@@ -181,7 +199,7 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 
 	nameFilter := req.URL.Query().Get("name")
 	if nameFilter != "" {
-		log = log.With().Str("name", nameFilter).Logger()
+		log = log.With().Str("nameFilter", nameFilter).Logger()
 	}
 
 	flusher, ok := rw.(http.Flusher)
@@ -222,6 +240,12 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 			if evt.Browser == nil {
 				continue
 			}
+
+			log.Info().
+				Dict("Browser", zerolog.Dict().
+					Str("name", evt.Browser.GetName())).
+				Str("eventType", string(evt.EventType)).
+				Msg("Browser event occurred")
 
 			data, err := json.Marshal(evt)
 			if err != nil {
@@ -269,4 +293,17 @@ func writeJSONError(rw http.ResponseWriter, status int, msg string, err error) {
 	rw.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	rw.WriteHeader(status)
 	buf.WriteTo(rw)
+}
+
+func setServiceLabel(req *http.Request, template *browserv1.Browser) {
+	hostname := req.Header.Get("X-Browser-Service-Hostname")
+	if hostname == "" {
+		return
+	}
+
+	if template.ObjectMeta.Labels == nil {
+		template.ObjectMeta.Labels = map[string]string{}
+	}
+
+	template.ObjectMeta.Labels[browserv1.SelenosisServiceLabelKey] = hostname
 }
