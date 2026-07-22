@@ -88,22 +88,14 @@ func main() {
 	brwSvc := browsersvc.NewService(cs, browserLister, browserBroadcaster)
 	cfgSvc := browserconfigsvc.NewService(cs, configLister, configBroadcaster)
 
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to resolve hostname, using fallback")
+		hostname = "unknown"
+	}
+
 	router := chi.NewRouter()
-	router.Use(func(next http.Handler) http.Handler {
-		fn := func(rw http.ResponseWriter, req *http.Request) {
-			logger := log.With().
-				Str("method", req.Method).
-				Str("path", req.URL.Path).
-				Str("reqID", uuid.NewString()).
-				Logger()
-
-			ctx := req.Context()
-			ctx = logctx.IntoContext(ctx, logger)
-
-			next.ServeHTTP(rw, req.WithContext(ctx))
-		}
-		return http.HandlerFunc(fn)
-	})
+	router.Use(requestContextMiddleware(log, hostname))
 
 	router.Route("/api/v1/namespaces/{namespace}", func(r chi.Router) {
 		r.Route("/browsers", func(r chi.Router) {
@@ -306,5 +298,27 @@ func browserConfigEventHandler(queue chan<- event.BrowserConfigEvent) cache.Reso
 				BrowserConfig: cfg.DeepCopy(),
 			})
 		},
+	}
+}
+
+func requestContextMiddleware(logger zerolog.Logger, hostname string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		fn := func(rw http.ResponseWriter, req *http.Request) {
+
+			l := logger.With().
+				Str("method", req.Method).
+				Str("path", req.URL.Path).
+				Str("reqId", uuid.NewString()).
+				Str("hostname", hostname).
+				Logger()
+
+			req.Header.Set("X-Browser-Service-Hostname", hostname)
+
+			ctx := req.Context()
+			ctx = logctx.IntoContext(ctx, l)
+
+			next.ServeHTTP(rw, req.WithContext(ctx))
+		}
+		return http.HandlerFunc(fn)
 	}
 }

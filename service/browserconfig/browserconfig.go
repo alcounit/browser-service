@@ -17,6 +17,7 @@ import (
 	"github.com/alcounit/browser-service/pkg/broadcast"
 	"github.com/alcounit/browser-service/pkg/event"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 var (
@@ -63,6 +64,10 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	log = log.With().Dict("BrowserConfig", zerolog.Dict().
+		Str("name", cfg.Name)).
+		Logger()
+
 	if len(cfg.Spec.Browsers) == 0 {
 		log.Error().Msg("failed to create browser config")
 		writeErrorResponse(rw, http.StatusBadRequest, "required field is empty", nil)
@@ -76,7 +81,7 @@ func (s *Service) Create(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log.Info().Str("browserConfigName", result.Name).Msg("browser config created successfully")
+	log.Info().Msg("browser config created successfully")
 	writeJSON(rw, result)
 }
 
@@ -90,7 +95,11 @@ func (s *Service) Get(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log = log.With().Str("namespace", namespace).Str("browserConfigName", name).Logger()
+	log = log.With().
+		Str("namespace", namespace).
+		Dict("BrowserConfig", zerolog.Dict().
+			Str("name", name)).
+		Logger()
 
 	result, err := s.lister.BrowserConfigs(namespace).Get(name)
 	if err != nil {
@@ -119,7 +128,11 @@ func (s *Service) Delete(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	log = log.With().Str("namespace", namespace).Str("name", name).Logger()
+	log = log.With().
+		Str("namespace", namespace).
+		Dict("BrowserConfig", zerolog.Dict().
+			Str("name", name)).
+		Logger()
 
 	if err := s.client.BrowserconfigV1().BrowserConfigs(namespace).Delete(req.Context(), name, metav1.DeleteOptions{}); err != nil {
 		if apierr.IsNotFound(err) {
@@ -184,7 +197,7 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 
 	nameFilter := req.URL.Query().Get("name")
 	if nameFilter != "" {
-		log = log.With().Str("name", nameFilter).Logger()
+		log = log.With().Str("nameFilter", nameFilter).Logger()
 	}
 
 	flusher, ok := rw.(http.Flusher)
@@ -225,6 +238,12 @@ func (s *Service) Events(rw http.ResponseWriter, req *http.Request) {
 			if evt.BrowserConfig == nil {
 				continue
 			}
+
+			log.Info().
+				Dict("BrowserConfig", zerolog.Dict().
+					Str("name", evt.BrowserConfig.GetName())).
+				Str("eventType", string(evt.EventType)).
+				Msg("BrowserConfig event occurred")
 
 			data, err := json.Marshal(evt)
 			if err != nil {
